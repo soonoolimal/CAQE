@@ -1,0 +1,29 @@
+# training
+batch_size: 256
+n_epochs: 50
+num_workers: 4  # number of DataLoader worker processes for loading hidden vector chunks
+
+# optimizer
+learning_rate: 3.0e-4
+weight_decay: 0.0
+
+# scheduler
+scheduler: "cosine"  # cosine / plateau / none
+warmup_epochs: 0
+plateau_patience: 3  # patience for ReduceLROnPlateau (used only when scheduler is "plateau")
+plateau_mode: "min"  # optimization direction for ReduceLROnPlateau
+
+# validation
+val_ratio: 0.1
+
+# codebook warmstart
+warm_start_batches: 10  # number of batches to collect encoder outputs for K-Means init
+
+# early stopping
+# note: disable when scheduler is cosine (cosine annealing is designed to run the full schedule)
+early_stopping: true           # set to false when using cosine scheduler
+early_stopping_patience: 5     # number of epochs without improvement before stopping
+early_stopping_min_delta: 0.0  # minimum change in val_loss to qualify as improvement
+
+# logging
+wandb_project: "CAQE"

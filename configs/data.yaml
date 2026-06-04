@@ -1,0 +1,18 @@
+gutenberg:
+    hf_id: "willwade/Gutenberg-dialog-en"
+    split: "train"       # provies train, valid, and test
+    text_column: "text"  # column name containing the text
+    # each row is a single utterance; empty rows mark conversation boundaries and are filtered out
+    # since the dataset is low-noise, no extra filtering is applied beyond standard preprocessing
+
+opensubtitles:
+    hf_id: "Helsinki-NLP/open_subtitles"
+    lang1: "en"  # language to extract (English side)
+    lang2: "fi"  # partner language required to load the parallel corpus (only lang1 side is used)
+    # since only the train split is available, no split config is needed
+    # user-contributed subtitles are high-noise; noise filters below are applied accordingly
+    noise_filter:
+        min_chars: 10         # minimum character count (removes fragments like "OK", "Yeah")
+        max_chars: 200        # maximum character count (removes likely subtitle merge errors)
+        min_alpha_ratio: 0.6  # minimum ratio of alphabetic characters (removes symbol/number-heavy lines)
+        max_token_length: 64  # maximum token count (subtitles are short by nature; longer ones are likely corrupt)
