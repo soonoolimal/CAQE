@@ -18,6 +18,8 @@ build/
 *.pt
 *.pth
 
+*.txt
+
 .venv/
 venv/
 env/
