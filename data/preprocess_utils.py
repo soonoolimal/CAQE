@@ -10,7 +10,7 @@ from typing import Iterable
 import pysbd
 
 # initialize pysbd English sentence segmenter once at module load
-_SEGMENTER = pysbd.Segmenter(language="en", clean=False)
+_SEGMENTER = pysbd.Segmenter(language="en", clean=False)  # preprocess manually using methods below
 
 
 # collapse newlines, tabs, and repeated spaces
@@ -27,10 +27,7 @@ def split_sentences(text: str) -> list[str]:
 
 
 # clean and optionally split an iterable of texts into a flat list of sentences
-def preprocess_texts(
-    texts: Iterable[str],
-    split: bool,
-) -> list[str]:
+def preprocess_texts(texts: Iterable[str], split: bool) -> list[str]:
     processed = []
 
     for text in texts:
@@ -54,7 +51,7 @@ def preprocess_texts(
 
 
 # write texts to a JSONL file, one {"text": "..."} object per line
-def save_jsonl(texts: Iterable[str], path: Path) -> None:
+def save_jsonl(texts: Iterable[str], path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
 
     count = 0
@@ -75,9 +72,10 @@ def save_jsonl(texts: Iterable[str], path: Path) -> None:
 # load texts from a JSONL file and return as a list of strings
 def load_jsonl(path: Path) -> list[str]:
     texts = []
+
+    # parse each line and extract the text field
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
-            # parse each line and extract the text field
             obj = json.loads(line)
             texts.append(obj["text"])
 

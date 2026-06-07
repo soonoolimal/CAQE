@@ -1,26 +1,25 @@
-# ── Backbone LLMs
-
-# NTP (Next Token Prediction) — unidirectional autoregressive LM
-# hidden extraction: h_{t-1}, the hidden vector at the position preceding the target token
-ntp:
-    llama3_3b: "meta-llama/Llama-3.2-3B"        # LLaMA 3.2 3B (Meta)
-    llama31_8b: "meta-llama/Meta-Llama-3.1-8B"  # LLaMA 3.1 8B (Meta)
-    opt_1.3b: "facebook/opt-1.3b"               # OPT 1.3B (Meta)
-
-# MLM (Masked Language Model) — bidirectional encoder
-# hidden extraction: hidden vector at the mask position from an input with the target token replaced by [MASK]
-mlm:
-    bert: "bert-base-uncased"                  # BERT base (Google)
-    roberta: "roberta-base"                    # RoBERTa base (Meta)
-    modernbert: "answerdotai/ModernBERT-base"  # ModernBERT base (Answer.AI)
-
-
-# ── CAQE
-embedding_dim: 256   # codebook vector dimension D
-n_embeddings: 512    # codebook size K
-encoder_hidden: 512  # Encoder MLP hidden layer dimension
-decoder_hidden: 512  # Decoder MLP hidden layer dimension
-clf_hidden: 256      # Classifier MLP hidden layer dimension
-beta: 0.25           # commitment loss weight (beta); robust in range 0.1–2.0 per VQ-VAE paper
-# hidden_dim: not set here — read at runtime from backbone.config.hidden_size
-# vocab_size: not set here — read at runtime from backbone.config.vocab_size
+# Backbone LLMs
+backbone:
+    ntp:
+        llama3_3b: "meta-llama/Llama-3.2-3B"        # LLaMA 3.2 3B (Meta)
+        llama31_8b: "meta-llama/Meta-Llama-3.1-8B"  # LLaMA 3.1 8B (Meta)
+        opt_1.3b: "facebook/opt-1.3b"               # OPT 1.3B (Meta)
+    mlm:
+        bert: "bert-base-uncased"                  # BERT base (Google)
+        roberta: "roberta-base"                    # RoBERTa base (Meta)
+        modernbert: "answerdotai/ModernBERT-base"  # ModernBERT base (Answer.AI)
+# CAQE
+caqe:
+    vqvae:
+        e_dim: 256         # codebook vector dimension D
+        n_e: 512           # codebook size K
+        enc_h_dim: 512     # Encoder MLP hidden layer dimension
+        dec_h_dim: 512     # Decoder MLP hidden layer dimension
+        beta: 0.25         # commitment loss weight (robust in range 0.1–2.0 per VQ-VAE paper)
+        ema_gamma: 0.99    # EMA decay for codebook usage tracking (N_k and m_k)
+        kmeans_n_init: 10  # number of K-Means runs with different centroid seeds (best result is kept)
+        kmeans_seed: 42    # random seed for K-Means reproducibility
+        # h_dim: not set here (read at runtime from backbone.config.hidden_size)
+    clf:
+        clf_h_dim: 256  # Classifier MLP hidden layer dimension
+        # vocab_size: not set here (read at runtime from backbone.config.vocab_size)

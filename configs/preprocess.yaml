@@ -6,3 +6,5 @@ tokenizer_max_length: 256  # maximum sequence length passed to the tokenizer (pa
 tokenizer_batch_size: 32   # number of sentences processed per tokenizer call
 forward_batch_size: 256    # forward pass batch size for MLM masked inputs
 chunk_size: 10000          # number of samples (tokens) per saved .pt chunk file
+
+shuffle_seed: 42  # random seed for sentence shuffling before hidden vector extraction

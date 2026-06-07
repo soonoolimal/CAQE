@@ -17,8 +17,8 @@ class BaseHiddenExtractor(ABC):
     Handles model loading, tokenization, and chunk saving as shared logic.
     """
     def __init__(self, model_key: str, model_hf_id: str, preprocess_config: dict):
-        self.model_key = model_key        # backbone (e.g., "bert")
-        self.model_hf_id = model_hf_id    # HuggingFace model path (e.g., "bert-base-uncased")
+        self.model_key = model_key      # backbone (e.g., "bert")
+        self.model_hf_id = model_hf_id  # HuggingFace model path (e.g., "bert-base-uncased")
 
         self.tokenizer_max_length = preprocess_config["tokenizer_max_length"]  # max sequence length for tokenizer
         self.tokenizer_batch_size = preprocess_config["tokenizer_batch_size"]  # sentences per tokenizer call
@@ -42,7 +42,7 @@ class BaseHiddenExtractor(ABC):
         self.model = AutoModel.from_pretrained(self.model_hf_id)
         self.model.eval()
         self.model.to(self.device)
-        print(f"Model loaded: {self.model_hf_id} → {self.device}")
+        print(f"Model loaded: {self.model_hf_id} -> {self.device}")
 
     def _tokenize(self, texts: list[str]) -> tuple[torch.Tensor, torch.Tensor]:
         assert self.tokenizer is not None, "_load_model() must be called before _tokenize()."
@@ -57,7 +57,7 @@ class BaseHiddenExtractor(ABC):
         # attention_mask[i, j]: 1 for real tokens, 0 for padding
         return encoded["input_ids"], encoded["attention_mask"]
 
-    # full hidden extraction pipeline
+    # full hidden vector extraction pipeline
     @abstractmethod
     def extract(self, texts: list[str], out_dir: Path):
         pass
@@ -73,7 +73,10 @@ class MLMHiddenExtractor(BaseHiddenExtractor):
     """Hidden vector extractor for MLM backbones (BERT-family).
 
     For each non-special token, replaces it with [MASK] and runs a forward pass.
-    The hidden vector at the mask position is extracted as the token's representation.
+    The hidden vector at the [MASK] position is produced by the frozen pretrained LLM.
+
+    In MLM models, h_[MASK] serves as the token's contextual representation,
+    with the original (pre-mask) token as the classification target.
 
     Chunk .pt format:
         hidden           : [N, hidden_dim] ─ hidden vector at the mask position
@@ -126,6 +129,7 @@ class MLMHiddenExtractor(BaseHiddenExtractor):
 
         return masked_input_ids, masked_attn_masks, target_token_ids, sentence_ids, token_positions
 
+    # runs forward passes on masked inputs in sub-batches and extracts hidden at each [MASK] position
     @torch.no_grad()
     def _forward_masked(
         self,
@@ -140,28 +144,28 @@ class MLMHiddenExtractor(BaseHiddenExtractor):
         for start in range(0, len(masked_input_ids), self.forward_batch_size):
             end = start + self.forward_batch_size
 
-            # stack list of tensors into [batch, seq_len] and move to device
+            # stack list of tensors into [forward_batch_size, seq_len] and move to device
             batch_ids = torch.stack(masked_input_ids[start:end]).to(self.device)
             batch_mask = torch.stack(masked_attn_masks[start:end]).to(self.device)
             batch_positions = token_positions[start:end]
 
-            # last_hidden_state shape: [batch, seq_len, hidden_dim]
+            # extract hidden vectors from the frozen pretrained LLM
             outputs = self.model(input_ids=batch_ids, attention_mask=batch_mask)
-            last_hidden = outputs.last_hidden_state
+            last_hidden = outputs.last_hidden_state  # [forward_batch_size, seq_len, hidden_dim]
 
             # extract hidden vector at the mask position for each sample
             batch_hidden = []
             for row_idx, pos in enumerate(batch_positions):
                 batch_hidden.append(last_hidden[row_idx, pos].detach().cpu())  # [hidden_dim]
 
-            all_hidden.append(torch.stack(batch_hidden))  # [sub_batch, hidden_dim]
+            all_hidden.append(torch.stack(batch_hidden))
 
         if not all_hidden:
             return torch.empty(0)
 
-        return torch.cat(all_hidden, dim=0)  # [N, hidden_dim]
+        return torch.cat(all_hidden, dim=0)  # [N, hidden_dim], N = total non-special tokens in batch
 
-    # runs the full extraction pipeline: tokenize → mask → forward → accumulate → save chunks
+    # runs the full extraction pipeline: tokenize -> mask -> forward -> accumulate -> save chunks
     def extract(self, texts: list[str], out_dir: Path) -> None:
         self._load_model()
 
@@ -228,8 +232,11 @@ class MLMHiddenExtractor(BaseHiddenExtractor):
 class NTPHiddenExtractor(BaseHiddenExtractor):
     """Hidden vector extractor for NTP backbones (GPT-family).
 
-    For each token t, the hidden vector h_{t-1} at the preceding position is extracted.
-    In NTP models, h_{t-1} serves as the representation used to predict token t.
+    For each token t, runs a forward pass on the original sequence without masking.
+    The hidden vector at position t-1 is produced by the frozen pretrained LLM.
+
+    In NTP models, h_{t-1} serves as the token's contextual representation,
+    with token t as the classification target.
 
     Chunk .pt format:
         hidden           : [N, hidden_dim] — hidden vector at position t-1
@@ -282,6 +289,7 @@ class NTPHiddenExtractor(BaseHiddenExtractor):
 
         return target_token_ids, sentence_ids, token_positions, hidden_positions, batch_indices
 
+    # runs a single forward pass on the full batch and extracts hidden at each h_{t-1} position
     @torch.no_grad()
     def _forward_batch(
         self,
@@ -295,21 +303,21 @@ class NTPHiddenExtractor(BaseHiddenExtractor):
         if not hidden_positions:
             return torch.empty(0)
 
-        # NTP runs one forward pass per tokenizer batch
+        # extract hidden vectors from the frozen pretrained LLM
         input_ids = input_ids.to(self.device)
         attention_mask = attention_mask.to(self.device)
 
         outputs = self.model(input_ids=input_ids, attention_mask=attention_mask)
-        last_hidden = outputs.last_hidden_state  # [batch_size, seq_len, hidden_dim]
+        last_hidden = outputs.last_hidden_state  # [tokenizer_batch_size, seq_len, hidden_dim]
 
         # index h_{t-1} for each sample: last_hidden[batch_indices[k], hidden_positions[k]]
         bi = torch.tensor(batch_indices, dtype=torch.long, device=self.device)
         hp = torch.tensor(hidden_positions, dtype=torch.long, device=self.device)
-        hidden = last_hidden[bi, hp]  # [N, hidden_dim]
+        hidden = last_hidden[bi, hp]  # [N, hidden_dim], N = total non-special tokens in batch
 
         return hidden.detach().cpu()
 
-    # runs the full extraction pipeline: tokenize → forward → accumulate → save chunks
+    # runs the full extraction pipeline: tokenize -> forward -> accumulate -> save chunks
     def extract(self, texts: list[str], out_dir: Path):
         self._load_model()
 
@@ -337,7 +345,7 @@ class NTPHiddenExtractor(BaseHiddenExtractor):
                 input_ids, attention_mask, sentence_offset,
             )
 
-            # single forward pass per batch → extract hidden at h_{t-1} positions
+            # single forward pass per batch -> extract hidden at h_{t-1} positions
             if hid_positions:
                 hidden = self._forward_batch(input_ids, attention_mask, batch_indices, hid_positions)
 

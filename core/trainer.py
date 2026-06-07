@@ -1,6 +1,8 @@
 """
-Trainer class for CAQE model training.
+Trainer class for CAQE.
 """
+
+from pathlib import Path
 
 import torch
 import torch.optim as optim
@@ -11,14 +13,14 @@ from models.caqe import CAQE
 
 
 class Trainer:
-    """Manages the full CAQE training lifecycle."""
-
+    """Manages the full CAQE training loop."""
     def __init__(
         self,
         model: CAQE,
         train_loader,
         val_loader,
         train_cfg: dict,
+        models_cfg: dict,
         device: torch.device,
         run_name: str,
     ):
@@ -26,45 +28,51 @@ class Trainer:
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.cfg = train_cfg
+        self.models_cfg = models_cfg
         self.device = device
         self.run_name = run_name
 
         self.optimizer = self._build_optimizer()
         self.scheduler = self._build_scheduler()
 
+        # cosine scheduler runs the full schedule (early stopping is incompatible)
+        self.use_early_stopping = (self.cfg["early_stopping"] and self.cfg["scheduler"] != "cosine")
+
     @torch.no_grad()
     def warm_start(self):
-        """Collects encoder outputs from the first warm_start_batches and runs K-Means init."""
+        """Collects Encoder(h) outputs from the first warm_start_batches and runs K-Means init."""
         self.model.eval()
-        z_e_samples = []
+        h_enc_samples = []
 
         for i, (hidden, _) in enumerate(self.train_loader):
             if i >= self.cfg["warm_start_batches"]:
                 break
             hidden = hidden.to(self.device)
-            x = hidden + self.model.vqvae.projection(hidden)
-            z_e = self.model.vqvae.encoder(x)
-            z_e_samples.append(z_e.cpu())
+            h_enc = self.model.vqvae.encoder(hidden)
+            h_enc_samples.append(h_enc.cpu())
 
-        z_e_all = torch.cat(z_e_samples, dim=0)
-        self.model.vqvae.quantizer.warm_start(z_e_all)
-        print(f"Warm start complete: {z_e_all.shape[0]:,} samples → K-Means({self.model.vqvae.quantizer.n_e})")
+        h_enc_all = torch.cat(h_enc_samples, dim=0)
+        self.model.vqvae.quantizer.warm_start(h_enc_all)
+        print(f"Warm start complete: {h_enc_all.shape[0]:,} samples -> K-Means({self.model.vqvae.quantizer.n_e})")
 
     def train(self):
         """Runs the full training loop."""
-        wandb.init(project=self.cfg["wandb_project"], name=self.run_name, config=self.cfg)
+        wandb.init(
+            project=self.cfg["wandb_project"],
+            name=self.run_name,
+            config={**self.models_cfg, **self.cfg},
+        )
         self.warm_start()
 
         best_val_loss = float("inf")
         patience_counter = 0
 
-        for epoch in range(1, self.cfg["n_epochs"] + 1):
+        epoch_pbar = tqdm(range(1, self.cfg["n_epochs"] + 1), desc="Epochs")
+        for epoch in epoch_pbar:
             train_metrics = self._train_epoch(epoch)
-            val_metrics, all_min_encodings, z_e_samples = self._val_epoch(epoch)
+            val_metrics, code_usage = self._val_epoch(epoch)
 
-            n_dead = self._reinit_dead_codes(all_min_encodings, z_e_samples)
-            if n_dead > 0:
-                print(f"  → {n_dead} dead codebook vector(s) reinitialized with random z_e samples.")
+            n_dead = self._reinit_dead_codes(code_usage) if self.cfg["dead_code_reinit"] else 0
             self._step_scheduler(val_metrics["loss"])
 
             wandb.log({
@@ -75,24 +83,22 @@ class Trainer:
                 "epoch": epoch,
             })
 
-            print(
-                f"Epoch {epoch:>3} | "
-                f"train_loss={train_metrics['loss']:.4f} | "
-                f"val_loss={val_metrics['loss']:.4f} | "
-                f"perplexity={val_metrics['perplexity']:.1f} | "
-                f"dead_codes={n_dead}"
-            )
+            epoch_pbar.set_postfix({
+                "train_loss": f"{train_metrics['loss']:.4f}",
+                "val_loss": f"{val_metrics['loss']:.4f}",
+                "ppl": f"{val_metrics['ppl']:.1f}",
+                "dead": n_dead,
+            })
 
-            # early stopping (skipped when early_stopping is false, e.g. cosine scheduler)
-            if self.cfg["early_stopping"]:
-                if val_metrics["loss"] < best_val_loss - self.cfg["early_stopping_min_delta"]:
-                    best_val_loss = val_metrics["loss"]
-                    patience_counter = 0
-                else:
-                    patience_counter += 1
-                    if patience_counter >= self.cfg["early_stopping_patience"]:
-                        print(f"Early stopping triggered at epoch {epoch} (no improvement for {patience_counter} epochs).")
-                        break
+            if val_metrics["loss"] < best_val_loss - self.cfg["early_stopping_min_delta"]:
+                best_val_loss = val_metrics["loss"]
+                self._save_checkpoint(epoch, val_metrics["loss"])
+                patience_counter = 0
+            elif self.use_early_stopping:
+                patience_counter += 1
+                if patience_counter >= self.cfg["early_stopping_patience"]:
+                    print(f"Early stopping triggered at epoch {epoch} (no improvement for {patience_counter} epochs).")
+                    break
 
         wandb.finish()
 
@@ -106,7 +112,10 @@ class Trainer:
     def _build_scheduler(self):
         name = self.cfg["scheduler"]
         if name == "cosine":
-            return optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=self.cfg["n_epochs"])
+            return optim.lr_scheduler.CosineAnnealingLR(
+                self.optimizer,
+                T_max=self.cfg["n_epochs"],
+            )
         elif name == "plateau":
             return optim.lr_scheduler.ReduceLROnPlateau(
                 self.optimizer,
@@ -117,10 +126,10 @@ class Trainer:
 
     def _train_epoch(self, epoch: int) -> dict:
         self.model.train()
-        totals = {"loss": 0.0, "recon_loss": 0.0, "vq_loss": 0.0, "clf_loss": 0.0, "perplexity": 0.0}
+        totals = {"loss": 0.0, "recon_loss": 0.0, "vq_loss": 0.0, "clf_loss": 0.0, "ppl": 0.0}
         n_batches = 0
 
-        pbar = tqdm(self.train_loader, desc=f"Train epoch {epoch}")
+        pbar = tqdm(self.train_loader, desc=f"Training epoch {epoch}")
         for hidden, target in pbar:
             hidden = hidden.to(self.device)
             target = target.to(self.device)
@@ -135,65 +144,92 @@ class Trainer:
             n_batches += 1
 
             pbar.set_postfix({
-                "loss":       f"{totals['loss'] / n_batches:.4f}",
-                "perplexity": f"{totals['perplexity'] / n_batches:.1f}",
+                "loss": f"{totals['loss'] / n_batches:.4f}",
+                "ppl": f"{totals['ppl'] / n_batches:.1f}",
             })
 
         return {k: v / n_batches for k, v in totals.items()}
 
     @torch.no_grad()
-    def _val_epoch(self, epoch: int) -> tuple[dict, torch.Tensor, torch.Tensor]:
-        """Runs validation and collects min_encodings and z_e for dead code reinitialization.
+    def _val_epoch(self, epoch: int) -> tuple[dict, torch.Tensor]:
+        """Runs validation and accumulates per-code assignment counts for dead-code detection.
 
         Returns:
             metrics: averaged loss terms.
-            all_min_encodings: [N, n_e] accumulated one-hot assignments across the epoch.
-            z_e_samples: encoder outputs collected for potential reinitialization.
+            code_usage: [n_e] total assignment count per codebook entry across the epoch.
         """
         self.model.eval()
-        totals = {"loss": 0.0, "recon_loss": 0.0, "vq_loss": 0.0, "clf_loss": 0.0, "perplexity": 0.0}
+        totals = {"loss": 0.0, "recon_loss": 0.0, "vq_loss": 0.0, "clf_loss": 0.0, "ppl": 0.0}
         n_batches = 0
-        all_min_encodings = []
-        z_e_samples = []
 
-        pbar = tqdm(self.val_loader, desc=f"Val   epoch {epoch}")
+        code_usage = torch.zeros(self.model.vqvae.quantizer.n_e)
+
+        pbar = tqdm(self.val_loader, desc=f"Validation epoch {epoch}")
         for hidden, target in pbar:
             hidden = hidden.to(self.device)
             target = target.to(self.device)
 
             out = self.model(hidden, target)
-            z_e_samples.append(out["z_e"].cpu())
-            all_min_encodings.append(out["min_encodings"].cpu())
+            min_encodings, _ = out["assign"]
+            code_usage += min_encodings.sum(dim=0).cpu()
 
             for k in totals:
                 totals[k] += out[k].item()
             n_batches += 1
 
             pbar.set_postfix({
-                "loss":       f"{totals['loss'] / n_batches:.4f}",
-                "perplexity": f"{totals['perplexity'] / n_batches:.1f}",
+                "loss": f"{totals['loss'] / n_batches:.4f}",
+                "ppl": f"{totals['ppl'] / n_batches:.1f}",
             })
 
         metrics = {k: v / n_batches for k, v in totals.items()}
-        return metrics, torch.cat(all_min_encodings, dim=0), torch.cat(z_e_samples, dim=0)
+        return metrics, code_usage
 
-    def _reinit_dead_codes(self, all_min_encodings: torch.Tensor, z_e_samples: torch.Tensor) -> int:
-        """Reinitializes codebook entries that were never assigned during the epoch.
+    def _reinit_dead_codes(self, code_usage: torch.Tensor) -> int:
+        """Reinitializes dead codebook entries with the most active vector + gaussian noise.
 
-        Returns the number of dead codes reinitialized.
+        Dead codes are set to the most-used codebook vector + small gaussian noise
+        so that they re-enter competition without duplicating the active vector exactly.
+
+        Returns the number of dead codes reinitialized for logging.
         """
-        usage = all_min_encodings.sum(dim=0)  # [n_e], total assignment count per code
-        dead = (usage == 0).nonzero(as_tuple=True)[0]
-
+        dead = (code_usage == 0).nonzero(as_tuple=True)[0]
         if len(dead) == 0:
             return 0
 
-        # randomly sampled z_e: dead codes have no convergence history,
-        # so a random point from the data distribution is a reasonable fresh start
-        idx = torch.randint(0, z_e_samples.shape[0], (len(dead),))
-        replacements = z_e_samples[idx].to(self.model.vqvae.quantizer.embedding.weight.device)
-        self.model.vqvae.quantizer.embedding.weight.data[dead] = replacements
+        weight = self.model.vqvae.quantizer.embedding.weight
+        most_active = code_usage.argmax().item()
+        source = weight.data[most_active]
+
+        noise_std = weight.data.std() * 0.01
+        for k in dead:
+            weight.data[k] = source + torch.randn_like(source) * noise_std
+
+        # seed EMA buffers for reinitialized codes
+        # so the next EMA update starts from the reinitialized codebook values, not from the stale near-zero state
+        quantizer = self.model.vqvae.quantizer
+        if quantizer.ema_gamma is not None:
+            quantizer.ema_embed_avg[dead] = weight.data[dead]
+            quantizer.ema_cluster_size[dead] = 1.0
+
+        # reset Adam moments for reinitialized codes
+        # so the next optimizer step starts fresh, not from the stale gradient history of the dead vectors
+        state = self.optimizer.state.get(weight)
+        if state:
+            state["exp_avg"][dead] = 0
+            state["exp_avg_sq"][dead] = 0
+
         return len(dead)
+
+    def _save_checkpoint(self, epoch: int, val_loss: float):
+        ckpt_dir = Path(self.cfg["checkpoint_dir"])
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+        torch.save({
+            "epoch": epoch,
+            "val_loss": val_loss,
+            "model": self.model.state_dict(),
+            "optimizer": self.optimizer.state_dict(),
+        }, ckpt_dir / f"{self.run_name}.pt")
 
     def _step_scheduler(self, val_loss: float):
         if self.scheduler is None:

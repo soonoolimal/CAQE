@@ -42,11 +42,11 @@ class BaseCorpusLoader(ABC):
     def load(self) -> list[str]:
         # load from local JSONL if it already exists
         if self.jsonl_path.exists():
-            print(f"[{self._dataset_name()}] Local file found — loading: {self.jsonl_path}")
+            print(f"[{self._dataset_name()}] Local file found. Loading: {self.jsonl_path}")
             return load_jsonl(self.jsonl_path)
 
-        # no local file — download from HuggingFace, preprocess, and save
-        print(f"[{self._dataset_name()}] No local file found — downloading from HuggingFace")
+        # no local JSONL: download from HuggingFace, preprocess, and save
+        print(f"[{self._dataset_name()}] No local file found. Downloading from HuggingFace")
         texts = self._download_and_preprocess()
         save_jsonl(texts, self.jsonl_path)
         return texts
@@ -68,7 +68,6 @@ class GutenbergLoader(BaseCorpusLoader):
         cfg = self.data_config
 
         dataset = load_dataset(cfg["hf_id"], split=cfg["split"])
-
         raw_texts = dataset[cfg["text_column"]]
 
         # filter out empty rows (conversation boundaries)
@@ -82,7 +81,7 @@ class GutenbergLoader(BaseCorpusLoader):
 class OpenSubtitlesLoader(BaseCorpusLoader):
     """Corpus loader for Helsinki-NLP/open_subtitles.
 
-    Extracts only the English (lang1) side from the parallel corpus and applies noise filtering.
+    Extracts only the English(lang1) side from the parallel corpus and applies noise filtering.
     Since subtitles are already sentence-level, only whitespace cleaning is applied without pysbd splitting.
     """
     def __init__(self, data_config: dict, preprocess_config: dict):
@@ -117,7 +116,7 @@ class OpenSubtitlesLoader(BaseCorpusLoader):
         dataset = load_dataset(
             cfg["hf_id"],
             lang1=cfg["lang1"],
-            lang2=cfg["lang2"],
+            lang2=cfg["lang2"],      # dummy
             split="train",           # only train split is available for OpenSubtitles
             trust_remote_code=True,  # required: dataset uses a custom loading script
         )

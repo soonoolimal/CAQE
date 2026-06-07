@@ -1,48 +1,56 @@
 """
-Cognitive Alignment Quantized Encoder.
+Cognitive Alignment Quantization-Based Entropy.
 """
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from models.classifier import Classifier
 from models.vqvae import VQVAE
 
 
 class CAQE(nn.Module):
     """CAQE = VQVAE + Classifier."""
-    def __init__(self, hidden_dim: int, vocab_size: int, cfg: dict):
+    def __init__(self, h_dim: int, vocab_size: int, cfg: dict):
         super().__init__()
-        self.vqvae = VQVAE(hidden_dim, vocab_size, cfg)
-        self.classifier = Classifier(cfg["embedding_dim"], cfg["clf_hidden"], vocab_size)
+
+        self.vqvae = VQVAE(h_dim, cfg["vqvae"])
+
+        # maps decoder output h_hat to logits over vocabulary tokens
+        clf_h_dim = cfg["clf"]["clf_h_dim"]
+        self.classifier = nn.Sequential(
+            nn.Linear(h_dim, clf_h_dim),
+            nn.LayerNorm(clf_h_dim),
+            nn.ReLU(),
+            nn.Linear(clf_h_dim, vocab_size),
+        )
 
     def forward(self, h: torch.Tensor, target_token_ids: torch.Tensor) -> dict:
         """Runs the full CAQE forward pass and returns all loss terms.
 
         Args:
             h: Pre-computed LLM hidden vectors.
-                Shape: [batch, hidden_dim].
-            target_token_ids: Target token ids used as both reconstruction and classifier label.
-                Shape: [batch].
+            target_token_ids: Target token ids for the classifier.
+                MLM: Masked token.
+                NTP: token at timestep t.
 
         Returns:
-            loss: total loss (recon + vq + clf).
-            recon_loss: cross-entropy between decoder logits and target_token_ids.
-            vq_loss: codebook loss + commitment loss with entropy penalty.
-            clf_loss: cross-entropy between classifier logits and target_token_ids.
-            z_e: continuous encoder output before quantization.
-            z_q: quantized latent vector.
-            perplexity: measures codebook utilization.
-            min_encodings: one-hot assignment matrix, shape [batch, n_e].
-            min_indices: codebook index per sample, shape [batch, 1].
+            loss: Total loss (vq_loss + recon_loss + clf_loss).
+            vq_loss: Codebook loss + Commitment loss.
+            recon_loss: MSE(h, h_hat).
+            clf_loss: CE(Classifier(h_hat), target_token_ids).
+            h_hat: Decoder output (reconstructed h).
+            z_e: Continuous encoder output before quantization.
+            z_q: Quantized latent vector.
+            ppl: Codebook utilization metric.
+            assign: (min_encodings, min_indices) tuple.
         """
-        out = self.vqvae(h, target_token_ids)
-        z_q = out["z_q"]
+        out = self.vqvae(h)
+        h_hat = out["h_hat"]
 
-        # classifier loss: z_q predicts the same target token via a separate MLP head
-        clf_logits = self.classifier(z_q)  # [batch, vocab_size]
-        clf_loss = F.cross_entropy(clf_logits, target_token_ids)
+        # L_clf updates Classifier only: h_hat is detached so gradient does not flow to Decoder or Encoder
+        clf_logits = self.classifier(h_hat.detach())
+        clf_loss = F.cross_entropy(clf_logits, target_token_ids)  # -log p_clf(x=target_token_id | h_hat)
 
         out["clf_loss"] = clf_loss
         out["loss"] = out["loss"] + clf_loss
@@ -50,24 +58,18 @@ class CAQE(nn.Module):
         return out
 
     def encode_and_quantize(self, h: torch.Tensor) -> torch.Tensor:
-        """Encodes h and returns z_q without decoding. Used internally by caqe_entropy().
-
-        Args:
-            h: Pre-computed LLM hidden vectors.
-                Shape: [batch, hidden_dim].
-
-        Returns:
-            z_q: Quantized latent vector.
-                Shape: [batch, embedding_dim].
-        """
+        """Encodes h and returns z_q without decoding."""
         return self.vqvae.encode_and_quantize(h)
 
-    def caqe_entropy(self, h: torch.Tensor) -> torch.Tensor:
-        """Computes the Shannon entropy of the decoder output distribution over the vocabulary.
+    def caqe(self, h: torch.Tensor) -> torch.Tensor:
+        """
+        Computes cognitive alignment quantization-based entropy:
+            H(p_clf(x | h_hat)) = -sum_x p_clf(x|h_hat) * log p_clf(x|h_hat) for each input h.
 
-        Higher entropy indicates greater prediction uncertainty, interpreted as higher cognitive load for the input token.
+        Used at inference to estimate cognitive alignment.
+        Semantically similar tokens map to the same e_k -> same h_hat -> same caqe -> Delta H ~= 0.
         """
         z_q = self.encode_and_quantize(h)
-        logits = self.vqvae.decoder(z_q)
-        probs = F.softmax(logits, dim=-1)
-        return -torch.sum(probs * torch.log(probs + 1e-10), dim=-1)  # [batch]
+        h_hat = self.vqvae.decoder(z_q)
+        probs = F.softmax(self.classifier(h_hat), dim=-1)
+        return -torch.sum(probs * torch.log(probs + 1e-10), dim=-1)

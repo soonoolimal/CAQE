@@ -14,7 +14,11 @@ Usage (from project root):
 """
 
 import argparse
+import random
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import yaml
 
@@ -22,25 +26,18 @@ from data.extract_hidden import MLMHiddenExtractor, NTPHiddenExtractor
 from data.load_corpus import GutenbergLoader, OpenSubtitlesLoader
 
 
-# load a YAML config file and return it as a dict
 def load_config(path: str) -> dict:
     with open(path, "r") as f:
         return yaml.safe_load(f)
 
 
-# returns all models for the given backbone as (model_key, hf_id, backbone_type) tuples
-def resolve_models(
-    backbone: str,
-    models_cfg: dict,
-) -> list[tuple[str, str, str]]:
-    return [
-        (key, hf_id, backbone) for key, hf_id in models_cfg[backbone].items()
-    ]
+def resolve_models(backbone: str, models_cfg: dict) -> list[tuple[str, str, str]]:
+    return [(key, hf_id, backbone) for key, hf_id in models_cfg["backbone"][backbone].items()]
 
 
-def main() -> None:
+def main():
     parser = argparse.ArgumentParser(
-        description="CAQE preprocessing: corpus loading → hidden vector extraction"
+        description="CAQE preprocessing: corpus loading -> hidden vector extraction"
     )
     parser.add_argument("--dataset", choices=["gutenberg", "opensubtitles"], required=True)
     parser.add_argument("--backbone", choices=["mlm", "ntp"], required=True)
@@ -56,10 +53,14 @@ def main() -> None:
         loader = GutenbergLoader(data_cfg["gutenberg"], pre_cfg)
     else:
         loader = OpenSubtitlesLoader(data_cfg["opensubtitles"], pre_cfg)
-
     texts = loader.load()
 
-    # ─── Step 2: Extract Hidden Vector
+    # shuffle sentences so chunks contain random sentences,
+    # making the tail-based train/val split representative (fixed seed keeps it consistent across backbones)
+    random.seed(pre_cfg["shuffle_seed"])
+    random.shuffle(texts)
+
+    # ─── Step 2. Extract Hidden Vectors
     # runs each model in the backbone sequentially and saves hidden vectors as chunks
     models = resolve_models(args.backbone, models_cfg)
     out_base = Path(pre_cfg["output_dir"]) / pre_cfg["hidden_vec_dir"] / args.dataset

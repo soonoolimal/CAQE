@@ -54,6 +54,9 @@ def split_chunks(chunk_dir: Path, val_ratio: float) -> tuple[list[Path], list[Pa
 
     The last val_ratio fraction of chunks is held out for validation.
     Sorting ensures a deterministic and reproducible split.
+
+    Sentences are shuffled before extraction so that chunks contain random sentences,
+    making this tail-based split representative of the full corpus.
     """
     chunks = sorted(chunk_dir.glob("chunk_*.pt"))
     if not chunks:
@@ -62,6 +65,7 @@ def split_chunks(chunk_dir: Path, val_ratio: float) -> tuple[list[Path], list[Pa
     n_val = max(1, int(len(chunks) * val_ratio))
     train_chunks = chunks[:-n_val]
     val_chunks = chunks[-n_val:]
+
     return train_chunks, val_chunks
 
 

@@ -1,0 +1,5 @@
+CUDA_VISIBLE_DEVICES=0 python scripts/preprocess.py --dataset gutenberg --backbone mlm
+CUDA_VISIBLE_DEVICES=1 python scripts/preprocess.py --dataset gutenberg --backbone ntp
+
+CUDA_VISIBLE_DEVICES=0 python scripts/preprocess.py --dataset opensubtitles --backbone mlm
+CUDA_VISIBLE_DEVICES=1 python scripts/preprocess.py --dataset opensubtitles --backbone ntp

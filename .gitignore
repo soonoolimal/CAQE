@@ -3,6 +3,7 @@ _*/
 
 data/processed_data/
 data/hidden_vec_data/
+checkpoints/
 results/
 wandb/
 

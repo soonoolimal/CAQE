@@ -8,163 +8,188 @@ import torch.nn.functional as F
 from sklearn.cluster import KMeans
 
 
-class ProjectionModule(nn.Module):
-    """Increases the variance of h before encoding via residual connection."""
-    def __init__(self, hidden_dim: int):
+class Encoder(nn.Module):
+    def __init__(self, h_dim: int, enc_h_dim: int, e_dim: int):
         super().__init__()
+
         self.net = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),  # output dim matches h for residual addition
-            nn.LayerNorm(hidden_dim),
+            nn.Linear(h_dim, enc_h_dim),
+            nn.LayerNorm(enc_h_dim),
+            nn.ReLU(),
+            nn.Linear(enc_h_dim, e_dim),
+        )
+
+    def forward(self, h: torch.Tensor) -> torch.Tensor:
+        return self.net(h)
+
+
+class Projection(nn.Module):
+    def __init__(self, h_dim: int, e_dim: int):
+        super().__init__()
+
+        self.net = nn.Sequential(
+            nn.Linear(h_dim, e_dim),
+            nn.LayerNorm(e_dim),
             nn.ReLU(),
         )
 
     def forward(self, h: torch.Tensor) -> torch.Tensor:
-        return self.net(h)  # [batch, hidden_dim]
-
-
-class Encoder(nn.Module):
-    """Maps h + Projection(h) to the continuous latent z_e."""
-    def __init__(self, hidden_dim: int, encoder_hidden: int, embedding_dim: int):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(hidden_dim, encoder_hidden),     # [batch, hidden_dim] -> [batch, encoder_hidden]
-            nn.LayerNorm(encoder_hidden),
-            nn.ReLU(),
-            nn.Linear(encoder_hidden, embedding_dim),  # [batch, encoder_hidden] -> [batch, embedding_dim]
-        )
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: h + Projection(h)
-        return self.net(x)  # [batch, embedding_dim]
+        return self.net(h)
 
 
 class VectorQuantizer(nn.Module):
-    """Discretization bottleneck with STE gradient and entropy regularization."""
-    def __init__(self, n_e: int, e_dim: int, beta: float):
+    """Discretizes z_e to the nearest codebook entry and computes VQ losses."""
+    def __init__(
+        self,
+        n_e: int,
+        e_dim: int,
+        beta: float,
+        ema_gamma: float | None,
+        kmeans_n_init: int,
+        kmeans_seed: int,
+    ):
         super().__init__()
+
         self.n_e = n_e
         self.e_dim = e_dim
         self.beta = beta
+        self.ema_gamma = ema_gamma
+        self.kmeans_n_init = kmeans_n_init
+        self.kmeans_seed = kmeans_seed
 
         self.embedding = nn.Embedding(n_e, e_dim)
-        self.embedding.weight.data.uniform_(-1.0 / n_e, 1.0 / n_e)  # initialize uniformly in [-1/K, 1/K] following the original VQ-VAE
 
-    def warm_start(self, z_e_samples: torch.Tensor) -> None:
-        """Initializes the codebook with K-Means cluster centers.
+        # EMA buffers
+        self.register_buffer("ema_cluster_size", torch.zeros(n_e))      # N_k (cluster size)
+        self.register_buffer("ema_embed_avg", torch.zeros(n_e, e_dim))  # m_k (embedding sum)
 
-        Call once before training with a representative sample of encoder outputs
-        to prevent early codebook collapse and accelerate convergence.
-        """
-        z = z_e_samples.detach().cpu().numpy()
-        kmeans = KMeans(n_clusters=self.n_e, n_init=10, random_state=42)
-        kmeans.fit(z)
-        centers = torch.tensor(kmeans.cluster_centers_, dtype=torch.float32)
-        self.embedding.weight.data.copy_(centers.to(self.embedding.weight.device))
+    def warm_start(self, h_enc: torch.Tensor):
+        """Initializes the codebook with K-Means over Encoder(h), then seeds EMA buffers to match."""
+        kmeans = KMeans(n_clusters=self.n_e, n_init=self.kmeans_n_init, random_state=self.kmeans_seed)
+        kmeans.fit(h_enc.detach().cpu().numpy())
+        centers = torch.tensor(kmeans.cluster_centers_, dtype=torch.float32).to(self.embedding.weight.device)
+        self.embedding.weight.data.copy_(centers)
 
-    def forward(self, z: torch.Tensor):
+        # seed EMA buffers so the first training step continues from K-Means, not from zero
+        if self.ema_gamma is not None:
+            self.ema_embed_avg.copy_(centers)
+            self.ema_cluster_size.fill_(1.0)
+
+    def forward(self, z_e: torch.Tensor):
         """Quantizes z to the nearest codebook entry via squared L2 distance.
 
         Args:
-            z: continuous encoder output.
+            z_e: Continuous latent, Encoder(h) + Projection(h).
                 No permute/reshape needed since input is already 1D in LLM domain, unlike CV domain.
-                Shape: [batch, embedding_dim].
 
         Returns:
-            vq_loss: codebook loss + commitment loss with entropy penalty.
-            z_q: quantized vector with STE gradient.
-            perplexity: measures codebook utilization.
-            min_encodings: one-hot assignment matrix.
-                Used in the trainer to detect never assigned codebook entries.
-            min_indices: codebook index per sample.
-                Used in the trainer to reinitialize never assigned codebook entries with z_e samples.
+            vq_loss: Codebook loss + Commitment loss.
+            z_q: Quantized codebook vector with STE gradient.
+            assign: (min_encodings, min_indices) tuple.
+                min_encodings: One-hot assignment matrix, used in validation to detect dead codebook vectors.
+                min_indices: Codebook index per sample, used to reinitialize dead codebook vectors with z_e.
+            ppl: Metric for monitoring codebook usage.
         """
         # squared L2 distances
-        d = torch.cdist(z, self.embedding.weight) ** 2  # [batch, n_e]
+        d = torch.cdist(z_e, self.embedding.weight) ** 2
 
         # nearest codebook entry
-        min_indices = torch.argmin(d, dim=1).unsqueeze(1)                             # [batch, 1]
-        min_encodings = torch.zeros(min_indices.shape[0], self.n_e, device=z.device)  # [batch, n_e]
-        min_encodings.scatter_(1, min_indices, 1)                                     # one-hot
+        min_indices = torch.argmin(d, dim=1).unsqueeze(1)
+        min_encodings = torch.zeros(min_indices.shape[0], self.n_e, device=z_e.device)
+        min_encodings.scatter_(1, min_indices, 1)  # one-hot
 
         # select the codebook vector for each sample via one-hot matmul (equivalent to index lookup)
-        z_q = torch.matmul(min_encodings, self.embedding.weight)  # [batch, embedding_dim]
+        z_q = torch.matmul(min_encodings, self.embedding.weight)
 
-        # codebook usage entropy
+        # perplexity (for monitoring codebook usage)
         e_mean = min_encodings.mean(dim=0)
-        codebook_entropy = -torch.sum(e_mean * torch.log(e_mean + 1e-10))
-        perplexity = torch.exp(codebook_entropy)
+        ppl = torch.exp(-torch.sum(e_mean * torch.log(e_mean + 1e-10)))
 
-        # codebook loss: moves e_k toward z_e (gradient to codebook)
-        codebook_loss = torch.mean((z_q - z.detach())**2) - codebook_entropy
-        # commitment loss: keeps z_e near e_k (gradient to encoder)
-        commitment_loss = self.beta * torch.mean((z_q.detach() - z)**2)
+        # EMA update (training only, if enabled): tracks codebook usage frequency and moves e_k toward assigned z_e
+        if self.training and self.ema_gamma is not None:
+            n_k = min_encodings.sum(dim=0)              # [n_e] count per entry in this batch
+            embed_sum = min_encodings.T @ z_e.detach()  # [n_e, e_dim] sum of assigned z_e
+
+            self.ema_cluster_size = self.ema_gamma * self.ema_cluster_size + (1 - self.ema_gamma) * n_k
+            self.ema_embed_avg = self.ema_gamma * self.ema_embed_avg + (1 - self.ema_gamma) * embed_sum
+
+            # update codebook entries: e_k = m_k / N_k
+            self.embedding.weight.data = self.ema_embed_avg / self.ema_cluster_size.unsqueeze(1).clamp(min=1e-5)
+
+        # losses
+        codebook_loss = torch.mean((z_q - z_e.detach()) ** 2)
+        commitment_loss = self.beta * torch.mean((z_q.detach() - z_e) ** 2)
         vq_loss = codebook_loss + commitment_loss
 
         # STE: pass gradient from z_q to z_e
-        z_q = z + (z_q - z).detach()  # [batch, embedding_dim]
+        # forward pass: z_e + (z_q - z_e) = z_q
+        # backward pass: ∂L/∂(z_q - z_e) = 0 (detached) -> ∂L/∂z_e = ∂L/∂z_q
+        z_q = z_e + (z_q - z_e).detach()
 
-        return vq_loss, z_q, perplexity, min_encodings, min_indices
+        return vq_loss, z_q, (min_encodings, min_indices), ppl
 
 
 class Decoder(nn.Module):
-    """Maps z_q to logits over the vocabulary for reconstruction."""
-    def __init__(self, embedding_dim: int, decoder_hidden: int, vocab_size: int):
+    """Reconstructs h from z_q."""
+    def __init__(self, e_dim: int, dec_h_dim: int, h_dim: int):
         super().__init__()
+
         self.net = nn.Sequential(
-            nn.Linear(embedding_dim, decoder_hidden),
-            nn.LayerNorm(decoder_hidden),
+            nn.Linear(e_dim, dec_h_dim),
+            nn.LayerNorm(dec_h_dim),
             nn.ReLU(),
-            nn.Linear(decoder_hidden, vocab_size),
+            nn.Linear(dec_h_dim, h_dim),
         )
 
     def forward(self, z_q: torch.Tensor) -> torch.Tensor:
-        # z_q: [batch, embedding_dim]
-        return self.net(z_q)  # [batch, vocab_size]
+        return self.net(z_q)
 
 
 class VQVAE(nn.Module):
     """VQ-VAE for NLP token representations."""
-    def __init__(self, hidden_dim: int, vocab_size: int, cfg: dict):
+    def __init__(self, h_dim: int, cfg: dict):
         super().__init__()
-        self.projection = ProjectionModule(hidden_dim)
-        self.encoder = Encoder(hidden_dim, cfg["encoder_hidden"], cfg["embedding_dim"])
-        self.quantizer = VectorQuantizer(cfg["n_embeddings"], cfg["embedding_dim"], cfg["beta"])
-        self.decoder = Decoder(cfg["embedding_dim"], cfg["decoder_hidden"], vocab_size)
 
-    def forward(self, h: torch.Tensor, target_token_ids: torch.Tensor) -> dict:
-        # h: [batch, hidden_dim], target_token_ids: [batch]
+        e_dim = cfg["e_dim"]
+        enc_h_dim = cfg["enc_h_dim"]
+        dec_h_dim = cfg["dec_h_dim"]
+        n_e = cfg["n_e"]
+        beta = cfg["beta"]
+        ema_gamma = cfg["ema_gamma"]
+        kmeans_n_init = cfg["kmeans_n_init"]
+        kmeans_seed = cfg["kmeans_seed"]
 
-        # residual projection
-        z_e = self.encoder(h + self.projection(h))
+        self.projection = Projection(h_dim, e_dim)
+        self.encoder = Encoder(h_dim, enc_h_dim, e_dim)
+        self.quantizer = VectorQuantizer(n_e, e_dim, beta, ema_gamma, kmeans_n_init, kmeans_seed)
+        self.decoder = Decoder(e_dim, dec_h_dim, h_dim)
+
+    def forward(self, h: torch.Tensor) -> dict:
+        # h: hidden vector at [MASK] position for MLM, h_{t-1} for NTP
+
+        # residual connection: z_e = Encoder(h) + Projection(h)
+        z_e = self.encoder(h) + self.projection(h)
 
         # quantize
-        vq_loss, z_q, perplexity, min_encodings, min_indices = self.quantizer(z_e)
+        vq_loss, z_q, assign, ppl = self.quantizer(z_e)
 
-        # decode
-        recon_loss = F.cross_entropy(self.decoder(z_q), target_token_ids)
+        # reconstruct h from z_q
+        h_hat = self.decoder(z_q)
+        recon_loss = F.mse_loss(h_hat, h)
 
         return {
             "loss": recon_loss + vq_loss,
             "recon_loss": recon_loss,
             "vq_loss": vq_loss,
+            "h_hat": h_hat,
             "z_e": z_e,
             "z_q": z_q,
-            "perplexity": perplexity,
-            "min_encodings": min_encodings,
-            "min_indices": min_indices,
+            "ppl": ppl,
+            "assign": assign,
         }
 
     def encode_and_quantize(self, h: torch.Tensor) -> torch.Tensor:
-        """Encodes h and returns z_q without decoding. Used by CAQE.encode_and_quantize().
-
-        Args:
-            h: Pre-computed LLM hidden vectors.
-                Shape: [batch, hidden_dim].
-
-        Returns:
-            z_q: Quantized latent vector.
-                Shape: [batch, embedding_dim].
-        """
-        z_e = self.encoder(h + self.projection(h))
-        _, z_q, _, _, _ = self.quantizer(z_e)
+        """Encodes h and returns z_q without decoding."""
+        z_e = self.encoder(h) + self.projection(h)
+        _, z_q, _, _ = self.quantizer(z_e)
         return z_q

@@ -7,7 +7,10 @@ Usage (from project root):
 """
 
 import argparse
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import torch
 import yaml
@@ -23,23 +26,23 @@ def load_config(path: str) -> dict:
         return yaml.safe_load(f)
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args():
     parser = argparse.ArgumentParser(description="Train CAQE model")
-    parser.add_argument("--dataset",  choices=["gutenberg", "opensubtitles"], required=True)
+    parser.add_argument("--dataset", choices=["gutenberg", "opensubtitles"], required=True)
     parser.add_argument("--backbone", choices=["mlm", "ntp"], required=True)
     parser.add_argument("--model", required=True, help="model key from models.yaml")
 
     return parser.parse_args()
 
 
-def main() -> None:
+def main():
     args = parse_args()
 
     models_cfg = load_config("configs/models.yaml")
     train_cfg = load_config("configs/train.yaml")
     pre_cfg = load_config("configs/preprocess.yaml")
 
-    model_hf_id = models_cfg[args.backbone][args.model]
+    model_hf_id = models_cfg["backbone"][args.backbone][args.model]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Data
@@ -50,11 +53,11 @@ def main() -> None:
 
     # Model
     backbone_cfg = AutoConfig.from_pretrained(model_hf_id)
-    model = CAQE(backbone_cfg.hidden_size, backbone_cfg.vocab_size, models_cfg).to(device)
+    model = CAQE(backbone_cfg.hidden_size, backbone_cfg.vocab_size, models_cfg["caqe"]).to(device)
 
     # Train
-    run_name = f"{args.dataset}_{args.model}_{models_cfg['n_embeddings']}_caqe"
-    trainer = Trainer(model, train_loader, val_loader, train_cfg, device, run_name)
+    run_name = f"{args.dataset}_{args.model}_{models_cfg['caqe']['vqvae']['n_e']}"
+    trainer = Trainer(model, train_loader, val_loader, train_cfg, models_cfg, device, run_name)
     trainer.train()
 
 
