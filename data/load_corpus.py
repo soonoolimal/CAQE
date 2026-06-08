@@ -5,6 +5,7 @@ Downloads from HuggingFace and caches locally as JSONL.
 
 from abc import ABC, abstractmethod
 from pathlib import Path
+import random
 
 from datasets import load_dataset
 
@@ -68,13 +69,15 @@ class GutenbergLoader(BaseCorpusLoader):
         cfg = self.data_config
 
         dataset = load_dataset(cfg["hf_id"], split=cfg["split"])
-        raw_texts = dataset[cfg["text_column"]]
+        # sample before converting to text to avoid loading the full dataset into memory
+        if len(dataset) > cfg["sample_size"]:
+            indices = random.sample(range(len(dataset)), cfg["sample_size"])
+            dataset = dataset.select(sorted(indices))
 
-        # filter out empty rows (conversation boundaries)
+        raw_texts = dataset[cfg["text_column"]]
         raw_texts = [t for t in raw_texts if t.strip()]
         print(f"After empty row filtering: {len(raw_texts):,}")
 
-        # split=True: each utterance may contain multiple sentences
         return preprocess_texts(raw_texts, split=True)
 
 
@@ -120,6 +123,11 @@ class OpenSubtitlesLoader(BaseCorpusLoader):
             split="train",           # only train split is available for OpenSubtitles
             trust_remote_code=True,  # required: dataset uses a custom loading script
         )
+
+        # sample before converting to text to avoid loading the full dataset into memory
+        if len(dataset) > cfg["sample_size"]:
+            indices = random.sample(range(len(dataset)), cfg["sample_size"])
+            dataset = dataset.select(sorted(indices))
 
         # extract only the lang1(English) side from each translation pair
         raw_texts = [item["translation"][cfg["lang1"]] for item in dataset]
