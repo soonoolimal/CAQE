@@ -49,22 +49,30 @@ class ChunkDataset(IterableDataset):
                 yield hidden, target
 
 
-def split_chunks(chunk_dir: Path, val_ratio: float) -> tuple[list[Path], list[Path]]:
+def split_chunks(chunk_dirs: list[Path] | Path, val_ratio: float) -> tuple[list[Path], list[Path]]:
     """Splits sorted chunk files into train and validation lists.
 
-    The last val_ratio fraction of chunks is held out for validation.
+    Accepts a single directory or a list of directories.
+    When multiple directories are given, each is split independently at val_ratio
+    so that every dataset contributes proportionally to both train and val.
+
+    The last val_ratio fraction of each directory's chunks is held out for validation.
     Sorting ensures a deterministic and reproducible split.
 
     Sentences are shuffled before extraction so that chunks contain random sentences,
     making this tail-based split representative of the full corpus.
     """
-    chunks = sorted(chunk_dir.glob("chunk_*.pt"))
-    if not chunks:
-        raise FileNotFoundError(f"No chunk files found: {chunk_dir}")
+    if isinstance(chunk_dirs, Path):
+        chunk_dirs = [chunk_dirs]
 
-    n_val = max(1, int(len(chunks) * val_ratio))
-    train_chunks = chunks[:-n_val]
-    val_chunks = chunks[-n_val:]
+    train_chunks, val_chunks = [], []
+    for chunk_dir in chunk_dirs:
+        chunks = sorted(chunk_dir.glob("chunk_*.pt"))
+        if not chunks:
+            raise FileNotFoundError(f"No chunk files found: {chunk_dir}")
+        n_val = max(1, int(len(chunks) * val_ratio))
+        train_chunks.extend(chunks[:-n_val])
+        val_chunks.extend(chunks[-n_val:])
 
     return train_chunks, val_chunks
 

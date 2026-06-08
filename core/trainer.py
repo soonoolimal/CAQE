@@ -70,7 +70,7 @@ class Trainer:
         epoch_pbar = tqdm(range(1, self.cfg["n_epochs"] + 1), desc="Epochs")
         for epoch in epoch_pbar:
             train_metrics = self._train_epoch(epoch)
-            val_metrics, code_usage = self._val_epoch(epoch)
+            val_metrics, code_usage = self._val_epoch(epoch, track_usage=self.cfg["dead_code_reinit"])
 
             n_dead = self._reinit_dead_codes(code_usage) if self.cfg["dead_code_reinit"] else 0
             self._step_scheduler(val_metrics["loss"])
@@ -151,12 +151,15 @@ class Trainer:
         return {k: v / n_batches for k, v in totals.items()}
 
     @torch.no_grad()
-    def _val_epoch(self, epoch: int) -> tuple[dict, torch.Tensor]:
-        """Runs validation and accumulates per-code assignment counts for dead-code detection.
+    def _val_epoch(self, epoch: int, track_usage: bool = True) -> tuple[dict, torch.Tensor]:
+        """Runs validation and optionally accumulates per-code assignment counts for dead-code detection.
+
+        Args:
+            track_usage: if False, skips code_usage accumulation (when dead_code_reinit is disabled).
 
         Returns:
             metrics: averaged loss terms.
-            code_usage: [n_e] total assignment count per codebook entry across the epoch.
+            code_usage: [n_e] total assignment count per codebook entry, or zeros if track_usage is False.
         """
         self.model.eval()
         totals = {"loss": 0.0, "recon_loss": 0.0, "vq_loss": 0.0, "clf_loss": 0.0, "ppl": 0.0}
@@ -170,8 +173,10 @@ class Trainer:
             target = target.to(self.device)
 
             out = self.model(hidden, target)
-            min_encodings, _ = out["assign"]
-            code_usage += min_encodings.sum(dim=0).cpu()
+
+            if track_usage:
+                min_encodings, _ = out["assign"]
+                code_usage += min_encodings.sum(dim=0).cpu()
 
             for k in totals:
                 totals[k] += out[k].item()

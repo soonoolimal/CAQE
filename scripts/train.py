@@ -1,9 +1,12 @@
 """
 Entry point for CAQE model training.
 
+Trains on the combined hidden vectors from all datasets in data.yaml,
+with each dataset split independently at val_ratio before combining.
+
 Usage (from project root):
-    python scripts/train.py --dataset gutenberg --backbone mlm --model bert
-    python scripts/train.py --dataset opensubtitles --backbone ntp --model llama3_3b
+    python scripts/train.py --backbone mlm --model bert
+    python scripts/train.py --backbone ntp --model llama3_3b
 """
 
 import argparse
@@ -28,7 +31,6 @@ def load_config(path: str) -> dict:
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train CAQE model")
-    parser.add_argument("--dataset", choices=["gutenberg", "opensubtitles"], required=True)
     parser.add_argument("--backbone", choices=["mlm", "ntp"], required=True)
     parser.add_argument("--model", required=True, help="model key from models.yaml")
 
@@ -41,13 +43,15 @@ def main():
     models_cfg = load_config("configs/models.yaml")
     train_cfg = load_config("configs/train.yaml")
     pre_cfg = load_config("configs/preprocess.yaml")
+    data_cfg = load_config("configs/data.yaml")
 
     model_hf_id = models_cfg["backbone"][args.backbone][args.model]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Data
-    chunk_dir = Path(pre_cfg["output_dir"]) / pre_cfg["hidden_vec_dir"] / args.dataset / args.model
-    train_chunks, val_chunks = split_chunks(chunk_dir, train_cfg["val_ratio"])
+    # Data: split each dataset independently, then combine
+    hidden_vec_dir = Path(pre_cfg["output_dir"]) / pre_cfg["hidden_vec_dir"]
+    chunk_dirs = [hidden_vec_dir / dataset / args.model for dataset in data_cfg]
+    train_chunks, val_chunks = split_chunks(chunk_dirs, train_cfg["val_ratio"])
     train_loader = make_dataloader(train_chunks, train_cfg["batch_size"], train_cfg["num_workers"], shuffle=True)
     val_loader = make_dataloader(val_chunks, train_cfg["batch_size"], train_cfg["num_workers"], shuffle=False)
 
@@ -56,7 +60,9 @@ def main():
     model = CAQE(backbone_cfg.hidden_size, backbone_cfg.vocab_size, models_cfg["caqe"]).to(device)
 
     # Train
-    run_name = f"{args.dataset}_{args.model}_{models_cfg['caqe']['vqvae']['n_e']}"
+    ema_suffix = "_ema" if models_cfg["caqe"]["vqvae"]["ema_gamma"] is not None else ""
+    reinit_suffix = "_reinit" if train_cfg["dead_code_reinit"] else ""
+    run_name = f"{args.model}_{models_cfg['caqe']['vqvae']['n_e']}{ema_suffix}{reinit_suffix}"
     trainer = Trainer(model, train_loader, val_loader, train_cfg, models_cfg, device, run_name)
     trainer.train()
 

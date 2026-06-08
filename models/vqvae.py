@@ -86,8 +86,8 @@ class VectorQuantizer(nn.Module):
             vq_loss: Codebook loss + Commitment loss.
             z_q: Quantized codebook vector with STE gradient.
             assign: (min_encodings, min_indices) tuple.
-                min_encodings: One-hot assignment matrix, used in validation to detect dead codebook vectors.
-                min_indices: Codebook index per sample, used to reinitialize dead codebook vectors with z_e.
+                min_encodings: One-hot assignment matrix [N, n_e], used in validation to detect dead codebook vectors.
+                min_indices: Nearest codebook index per sample [N, 1].
             ppl: Metric for monitoring codebook usage.
         """
         # squared L2 distances

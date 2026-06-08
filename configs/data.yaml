@@ -9,6 +9,5 @@ opensubtitles:
     lang2: "fi"  # partner language required to load the parallel corpus (only lang1 side is used)
     noise_filter:
         min_chars: 10         # minimum character count (removes fragments like "OK", "Yeah")
-        max_chars: 200        # maximum character count (removes likely subtitle merge errors)
+        max_chars: 200        # maximum character count (removes likely subtitle merge errors); 200 chars ≈ 50 tokens, so this also bounds token length
         min_alpha_ratio: 0.6  # minimum ratio of alphabetic characters (removes symbol/number-heavy lines)
-        max_token_length: 64  # maximum token count (longer subtitles are likely corrupt)

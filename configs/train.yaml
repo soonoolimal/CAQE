@@ -26,4 +26,4 @@ checkpoint_dir: "checkpoints"  # directory to save best model checkpoints
 
 # codebook
 warm_start_batches: 50  # batches of Encoder(h) outputs collected for K-Means warm start
-dead_code_reinit: true  # reinitialize dead codebook entries after each epoch
+dead_code_reinit: false  # reinitialize dead codebook entries after each epoch

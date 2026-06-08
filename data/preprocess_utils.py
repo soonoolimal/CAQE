@@ -57,8 +57,6 @@ def save_jsonl(texts: Iterable[str], path: Path):
     count = 0
     with open(path, "w", encoding="utf-8") as f:
         for text in texts:
-            text = clean_text(text)
-
             if not text:
                 continue
 
