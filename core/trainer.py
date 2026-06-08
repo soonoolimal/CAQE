@@ -97,7 +97,7 @@ class Trainer:
             elif self.use_early_stopping:
                 patience_counter += 1
                 if patience_counter >= self.cfg["early_stopping_patience"]:
-                    print(f"Early stopping triggered at epoch {epoch} (no improvement for {patience_counter} epochs).")
+                    tqdm.write(f"Early stopping triggered at epoch {epoch} (no improvement for {patience_counter} epochs).")
                     break
 
         wandb.finish()

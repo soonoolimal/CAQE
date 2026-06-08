@@ -38,8 +38,9 @@ class BaseHiddenExtractor(ABC):
         if self.tokenizer.pad_token is None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
 
-        # AutoModel: base transformer without LM head, returns last_hidden_state
-        self.model = AutoModel.from_pretrained(self.model_hf_id)
+        # AutoModel: base transformer without LM head, returns last_hidden_state.
+        # bf16 halves memory and doubles Tensor Core throughput with hidden vectors cast to float32 on save
+        self.model = AutoModel.from_pretrained(self.model_hf_id, dtype=torch.bfloat16)
         self.model.eval()
         self.model.to(self.device)
         print(f"Model loaded: {self.model_hf_id} -> {self.device}")
@@ -66,7 +67,7 @@ class BaseHiddenExtractor(ABC):
         out_path.parent.mkdir(parents=True, exist_ok=True)
         torch.save(data, out_path)
         hidden_shape = tuple(data["hidden"].shape)
-        print(f"Chunk saved: {out_path} | hidden shape={hidden_shape}")
+        tqdm.write(f"Chunk saved: {out_path} | hidden shape={hidden_shape}")
 
 
 class MLMHiddenExtractor(BaseHiddenExtractor):
@@ -153,12 +154,10 @@ class MLMHiddenExtractor(BaseHiddenExtractor):
             outputs = self.model(input_ids=batch_ids, attention_mask=batch_mask)
             last_hidden = outputs.last_hidden_state  # [forward_batch_size, seq_len, hidden_dim]
 
-            # extract hidden vector at the mask position for each sample
-            batch_hidden = []
-            for row_idx, pos in enumerate(batch_positions):
-                batch_hidden.append(last_hidden[row_idx, pos].detach().cpu())  # [hidden_dim]
-
-            all_hidden.append(torch.stack(batch_hidden))
+            # gather hidden vectors at mask positions with a single vectorized index op
+            rows = torch.arange(len(batch_positions), device=self.device)
+            cols = torch.tensor(batch_positions, device=self.device)
+            all_hidden.append(last_hidden[rows, cols].detach().cpu())
 
         if not all_hidden:
             return torch.empty(0)
