@@ -2,7 +2,7 @@
 Delta-P experiment on CoInCo: ΔP = P(substitute|context) - P(original|context) per method.
 
 Usage (from project root):
-    python scripts/deltaP.py --backbone mlm --model bert --ckpt path/to/ckpt.pt --coinco path/to/coinco.txt
+    python scripts/delta_p.py --backbone mlm --model bert --ckpt path/to/ckpt.pt --coinco data/inference/coinco_dataset.txt
 """
 
 import argparse
