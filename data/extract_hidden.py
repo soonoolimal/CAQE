@@ -227,6 +227,29 @@ class MLMHiddenExtractor(BaseHiddenExtractor):
         out_path = out_dir / f"chunk_{chunk_idx:04d}.pt"
         self._save_chunk(data, out_path)
 
+    @torch.no_grad()
+    def extract_to_memory(self, texts: list[str]) -> torch.Tensor:
+        """Extracts MLM hidden vectors into memory without saving to disk.
+
+        Returns:
+            hidden: [N, hidden_dim] float tensor over all non-special tokens.
+        """
+        if self.model is None:
+            self._load_model()
+
+        all_hidden = []
+        for batch_start in range(0, len(texts), self.tokenizer_batch_size):
+            batch_texts = texts[batch_start: batch_start + self.tokenizer_batch_size]
+            input_ids, attention_mask = self._tokenize(batch_texts)
+            masked_ids, masked_masks, _, _, tok_positions = self._make_examples(
+                input_ids, attention_mask, sentence_offset=0,
+            )
+            if masked_ids:
+                hidden = self._forward_masked(masked_ids, masked_masks, tok_positions)
+                all_hidden.append(hidden.float())
+
+        return torch.cat(all_hidden, dim=0) if all_hidden else torch.empty(0)
+
 
 class NTPHiddenExtractor(BaseHiddenExtractor):
     """Hidden vector extractor for NTP backbones (GPT-family).
@@ -381,3 +404,26 @@ class NTPHiddenExtractor(BaseHiddenExtractor):
         }
         out_path = out_dir / f"chunk_{chunk_idx:04d}.pt"
         self._save_chunk(data, out_path)
+
+    @torch.no_grad()
+    def extract_to_memory(self, texts: list[str]) -> torch.Tensor:
+        """Extracts NTP hidden vectors into memory without saving to disk.
+
+        Returns:
+            hidden: [N, hidden_dim] float tensor over all non-special tokens.
+        """
+        if self.model is None:
+            self._load_model()
+
+        all_hidden = []
+        for batch_start in range(0, len(texts), self.tokenizer_batch_size):
+            batch_texts = texts[batch_start: batch_start + self.tokenizer_batch_size]
+            input_ids, attention_mask = self._tokenize(batch_texts)
+            _, _, _, hid_positions, batch_indices = self._make_examples(
+                input_ids, attention_mask, sentence_offset=0,
+            )
+            if hid_positions:
+                hidden = self._forward_batch(input_ids, attention_mask, batch_indices, hid_positions)
+                all_hidden.append(hidden.float())
+
+        return torch.cat(all_hidden, dim=0) if all_hidden else torch.empty(0)
