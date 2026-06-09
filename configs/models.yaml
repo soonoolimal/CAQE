@@ -12,7 +12,7 @@ backbone:
 caqe:
     vqvae:
         e_dim: 256         # codebook vector dimension D
-        n_e: 512           # codebook size K
+        n_e: 8000          # codebook size K
         enc_h_dim: 512     # Encoder MLP hidden layer dimension
         dec_h_dim: 512     # Decoder MLP hidden layer dimension
         beta: 0.25         # commitment loss weight (robust in range 0.1–2.0 per VQ-VAE paper)

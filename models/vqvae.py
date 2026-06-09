@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from sklearn.cluster import KMeans
+from tqdm import tqdm
 
 
 class Encoder(nn.Module):
@@ -65,9 +66,16 @@ class VectorQuantizer(nn.Module):
 
     def warm_start(self, h_enc: torch.Tensor):
         """Initializes the codebook with K-Means over Encoder(h), then seeds EMA buffers to match."""
-        kmeans = KMeans(n_clusters=self.n_e, n_init=self.kmeans_n_init, random_state=self.kmeans_seed)
-        kmeans.fit(h_enc.detach().cpu().numpy())
-        centers = torch.tensor(kmeans.cluster_centers_, dtype=torch.float32).to(self.embedding.weight.device)
+        data = h_enc.detach().cpu().numpy()
+        best_inertia = float("inf")
+        best_centers = None
+        for i in tqdm(range(self.kmeans_n_init), desc="K-Means"):
+            km = KMeans(n_clusters=self.n_e, n_init=1, random_state=self.kmeans_seed + i)
+            km.fit(data)
+            if km.inertia_ < best_inertia:
+                best_inertia = km.inertia_
+                best_centers = km.cluster_centers_
+        centers = torch.tensor(best_centers, dtype=torch.float32).to(self.embedding.weight.device)
         self.embedding.weight.data.copy_(centers)
 
         # seed EMA buffers so the first training step continues from K-Means, not from zero

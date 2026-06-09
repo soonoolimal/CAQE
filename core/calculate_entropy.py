@@ -4,7 +4,8 @@ from pathlib import Path
 
 import torch
 import torch.nn.functional as F
-from transformers import AutoModelForCausalLM, AutoModelForMaskedLM, AutoTokenizer, PreTrainedTokenizerBase
+from transformers import (AutoModelForCausalLM, AutoModelForMaskedLM,
+                          AutoTokenizer, PreTrainedTokenizerBase)
 
 from data.extract_hidden import BaseHiddenExtractor
 from models.caqe import CAQE

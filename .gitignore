@@ -1,34 +1,23 @@
 .*/
 _*/
 
-data/processed_data/
-data/hidden_vec_data/
-checkpoints/
-results/
-wandb/
-
-__pycache__/
-*.py[cod]
-*.pyo
-*.egg-info/
-dist/
-build/
-.eggs/
-
-*.pt
-*.pth
-
-*.txt
-
-.venv/
 venv/
 env/
 
-.ipynb_checkpoints/
-*.ipynb
+data/train/
+data/inference/
 
-.vscode/
-.idea/
+checkpoints/
+wandb/
+logs/
+
+*.jsonl
+
+*.pt
+*.pth
+*.py[cod]
+
+*.ipynb
 
 .DS_Store
 Thumbs.db

@@ -3,9 +3,9 @@ Corpus loaders for Gutenberg and OpenSubtitles datasets.
 Downloads from HuggingFace and caches locally as JSONL.
 """
 
+import random
 from abc import ABC, abstractmethod
 from pathlib import Path
-import random
 
 from datasets import load_dataset
 

@@ -1,6 +1,6 @@
-output_dir: "data"                    # root directory for all preprocessing outputs
-processed_data_dir: "processed_data"  # subdirectory under output_dir for preprocessed JSONL files
-hidden_vec_dir: "hidden_vec_data"     # subdirectory under output_dir for hidden vector chunk files
+output_dir: "data/train"              # root directory for all preprocessing outputs
+processed_data_dir: "preprocessed"    # subdirectory under output_dir for preprocessed JSONL files
+hidden_vec_dir: "hidden_vecs"         # subdirectory under output_dir for hidden vector chunk files
 
 tokenizer_max_length: 256  # maximum sequence length passed to the tokenizer (padding and truncation threshold)
 tokenizer_batch_size: 32   # number of sentences processed per tokenizer call

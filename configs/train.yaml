@@ -3,7 +3,7 @@ wandb_project: "CAQE-Train"
 
 # training
 batch_size: 256
-n_epochs: 50
+n_epochs: 100
 num_workers: 4  # number of DataLoader worker processes for loading hidden vector chunks
 
 # optimizer
@@ -22,7 +22,8 @@ early_stopping_min_delta: 0.0  # minimum val_loss improvement to reset patience
 val_ratio: 0.1
 
 # checkpoint
-checkpoint_dir: "checkpoints"  # directory to save best model checkpoints
+checkpoint_dir: "checkpoints"      # root directory for checkpoints
+checkpoint_interval: 10           # save a checkpoint every N epochs
 
 # codebook
 warm_start_batches: 50  # batches of Encoder(h) outputs collected for K-Means warm start

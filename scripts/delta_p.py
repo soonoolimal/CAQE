@@ -2,7 +2,7 @@
 Delta-P experiment on CoInCo: ΔP = P(substitute|context) - P(original|context) per method.
 
 Usage (from project root):
-    python scripts/delta_p.py --backbone mlm --model bert --ckpt path/to/ckpt.pt --coinco data/inference/coinco_dataset.txt
+    python scripts/delta_p.py --backbone mlm --model bert --ckpt path/to/ckpt.pt --coinco data/inference/coinco.txt
 """
 
 import argparse
@@ -16,10 +16,10 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as F
 import yaml
-from transformers import AutoConfig, AutoModel, AutoModelForCausalLM, AutoModelForMaskedLM, AutoTokenizer
+from transformers import (AutoConfig, AutoModel, AutoModelForCausalLM,
+                          AutoModelForMaskedLM, AutoTokenizer)
 
 from models.caqe import CAQE
-
 
 # ---------------------------------------------------------------------------
 # Data

@@ -5,8 +5,8 @@ Downloads datasets from HuggingFace, preprocesses text, and extracts LLM hidden 
 Specify a dataset and backbone to prepare the training data for that combination.
 
 Output:
-    data/processed_data/{dataset}.jsonl
-    data/hidden_vec_data/{dataset}/{model_key}/chunk_XXXX.pt
+    data/train/preprocessed/{dataset}.jsonl
+    data/train/hidden_vecs/{dataset}/{model_key}/chunk_XXXX.pt
 
 Usage (from project root):
     python scripts/preprocess.py --dataset gutenberg --backbone mlm

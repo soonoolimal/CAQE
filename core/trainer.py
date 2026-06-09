@@ -2,6 +2,7 @@
 Trainer class for CAQE.
 """
 
+import csv
 from pathlib import Path
 
 import torch
@@ -62,9 +63,12 @@ class Trainer:
             name=self.run_name,
             config={**self.models_cfg, **self.cfg},
         )
+        csv_path, csv_fields, flat_cfg = self._init_csv()
+
         self.warm_start()
 
         best_val_loss = float("inf")
+        best_epoch = 0
         patience_counter = 0
 
         epoch_pbar = tqdm(range(1, self.cfg["n_epochs"] + 1), desc="Epochs")
@@ -75,13 +79,16 @@ class Trainer:
             n_dead = self._reinit_dead_codes(code_usage) if self.cfg["dead_code_reinit"] else 0
             self._step_scheduler(val_metrics["loss"])
 
+            lr = self.optimizer.param_groups[0]["lr"]
             wandb.log({
                 **{f"train/{k}": v for k, v in train_metrics.items()},
                 **{f"val/{k}": v for k, v in val_metrics.items()},
                 "dead_codes": n_dead,
-                "lr": self.optimizer.param_groups[0]["lr"],
+                "lr": lr,
                 "epoch": epoch,
             })
+
+            self._log_csv(csv_path, csv_fields, flat_cfg, epoch, lr, train_metrics, val_metrics, n_dead)
 
             epoch_pbar.set_postfix({
                 "train_loss": f"{train_metrics['loss']:.4f}",
@@ -90,8 +97,12 @@ class Trainer:
                 "dead": n_dead,
             })
 
+            if epoch % self.cfg["checkpoint_interval"] == 0:
+                self._save_interval_checkpoint(epoch)
+
             if val_metrics["loss"] < best_val_loss - self.cfg["early_stopping_min_delta"]:
                 best_val_loss = val_metrics["loss"]
+                best_epoch = epoch
                 self._save_checkpoint(epoch, val_metrics["loss"])
                 patience_counter = 0
             elif self.use_early_stopping:
@@ -99,6 +110,15 @@ class Trainer:
                 if patience_counter >= self.cfg["early_stopping_patience"]:
                     tqdm.write(f"Early stopping triggered at epoch {epoch} (no improvement for {patience_counter} epochs).")
                     break
+
+        # rename best checkpoint and CSV to include best epoch
+        suffix = f"_best{best_epoch}"
+        ckpt_dir = Path(self.cfg["checkpoint_dir"]) / self.run_name
+        ckpt_path = ckpt_dir / f"{self.run_name}.pt"
+        if ckpt_path.exists():
+            ckpt_path.rename(ckpt_path.with_stem(f"{self.run_name}{suffix}"))
+        if csv_path.exists():
+            csv_path.rename(csv_path.with_stem(f"{self.run_name}{suffix}"))
 
         wandb.finish()
 
@@ -226,15 +246,25 @@ class Trainer:
 
         return len(dead)
 
+    def _ckpt_dir(self) -> Path:
+        d = Path(self.cfg["checkpoint_dir"]) / self.run_name
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
     def _save_checkpoint(self, epoch: int, val_loss: float):
-        ckpt_dir = Path(self.cfg["checkpoint_dir"])
-        ckpt_dir.mkdir(parents=True, exist_ok=True)
         torch.save({
             "epoch": epoch,
             "val_loss": val_loss,
             "model": self.model.state_dict(),
             "optimizer": self.optimizer.state_dict(),
-        }, ckpt_dir / f"{self.run_name}.pt")
+        }, self._ckpt_dir() / f"{self.run_name}.pt")
+
+    def _save_interval_checkpoint(self, epoch: int):
+        torch.save({
+            "epoch": epoch,
+            "model": self.model.state_dict(),
+            "optimizer": self.optimizer.state_dict(),
+        }, self._ckpt_dir() / f"{self.run_name}_epoch{epoch}.pt")
 
     def _step_scheduler(self, val_loss: float):
         if self.scheduler is None:
@@ -243,3 +273,47 @@ class Trainer:
             self.scheduler.step(val_loss)
         else:
             self.scheduler.step()
+
+    def _init_csv(self) -> tuple[Path, list[str], dict]:
+        """Creates the CSV file under logs/ and returns (path, fieldnames, flat_cfg)."""
+        flat_cfg = {}
+        for k, v in {**self.models_cfg, **self.cfg}.items():
+            if isinstance(v, dict):
+                for k2, v2 in v.items():
+                    if isinstance(v2, dict):
+                        for k3, v3 in v2.items():
+                            flat_cfg[f"{k}.{k2}.{k3}"] = v3
+                    else:
+                        flat_cfg[f"{k}.{k2}"] = v2
+            else:
+                flat_cfg[k] = v
+
+        fields = (
+            ["epoch", "lr"]
+            + [f"train_{k}" for k in ["loss", "recon_loss", "vq_loss", "clf_loss", "ppl"]]
+            + [f"val_{k}" for k in ["loss", "recon_loss", "vq_loss", "clf_loss", "ppl"]]
+            + ["dead_codes"]
+            + list(flat_cfg.keys())
+        )
+
+        path = Path("logs") / f"{self.run_name}.csv"
+        path.parent.mkdir(exist_ok=True)
+        with open(path, "w", newline="") as f:
+            csv.DictWriter(f, fieldnames=fields).writeheader()
+
+        return path, fields, flat_cfg
+
+    def _log_csv(
+        self, path: Path, fields: list[str], flat_cfg: dict, epoch: int, lr: float,
+        train_metrics: dict, val_metrics: dict, n_dead: int,
+    ):
+        """Appends one epoch row to the local CSV log."""
+        with open(path, "a", newline="") as f:
+            csv.DictWriter(f, fieldnames=fields).writerow({
+                "epoch": epoch,
+                "lr": lr,
+                **{f"train_{k}": v for k, v in train_metrics.items()},
+                **{f"val_{k}": v for k, v in val_metrics.items()},
+                "dead_codes": n_dead,
+                **flat_cfg,
+            })
