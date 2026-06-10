@@ -74,9 +74,11 @@ class Trainer:
         epoch_pbar = tqdm(range(1, self.cfg["n_epochs"] + 1), desc="Epochs")
         for epoch in epoch_pbar:
             train_metrics = self._train_epoch(epoch)
-            val_metrics, code_usage = self._val_epoch(epoch, track_usage=self.cfg["dead_code_reinit"])
+            val_metrics, code_usage = self._val_epoch(epoch)
 
-            n_dead = self._reinit_dead_codes(code_usage) if self.cfg["dead_code_reinit"] else 0
+            n_dead = int((code_usage == 0).sum().item())
+            if self.cfg["dead_code_reinit"]:
+                self._reinit_dead_codes(code_usage)
             self._step_scheduler(val_metrics["loss"])
 
             lr = self.optimizer.param_groups[0]["lr"]
@@ -171,15 +173,12 @@ class Trainer:
         return {k: v / n_batches for k, v in totals.items()}
 
     @torch.no_grad()
-    def _val_epoch(self, epoch: int, track_usage: bool = True) -> tuple[dict, torch.Tensor]:
-        """Runs validation and optionally accumulates per-code assignment counts for dead-code detection.
-
-        Args:
-            track_usage: if False, skips code_usage accumulation (when dead_code_reinit is disabled).
+    def _val_epoch(self, epoch: int) -> tuple[dict, torch.Tensor]:
+        """Runs validation and accumulates per-code assignment counts for dead-code monitoring.
 
         Returns:
             metrics: averaged loss terms.
-            code_usage: [n_e] total assignment count per codebook entry, or zeros if track_usage is False.
+            code_usage: [n_e] total assignment count per codebook entry.
         """
         self.model.eval()
         totals = {"loss": 0.0, "recon_loss": 0.0, "vq_loss": 0.0, "clf_loss": 0.0, "ppl": 0.0}
@@ -194,9 +193,8 @@ class Trainer:
 
             out = self.model(hidden, target)
 
-            if track_usage:
-                min_encodings, _ = out["assign"]
-                code_usage += min_encodings.sum(dim=0).cpu()
+            min_encodings, _ = out["assign"]
+            code_usage += min_encodings.sum(dim=0).cpu()
 
             for k in totals:
                 totals[k] += out[k].item()
@@ -210,17 +208,15 @@ class Trainer:
         metrics = {k: v / n_batches for k, v in totals.items()}
         return metrics, code_usage
 
-    def _reinit_dead_codes(self, code_usage: torch.Tensor) -> int:
+    def _reinit_dead_codes(self, code_usage: torch.Tensor):
         """Reinitializes dead codebook entries with the most active vector + gaussian noise.
 
         Dead codes are set to the most-used codebook vector + small gaussian noise
         so that they re-enter competition without duplicating the active vector exactly.
-
-        Returns the number of dead codes reinitialized for logging.
         """
         dead = (code_usage == 0).nonzero(as_tuple=True)[0]
         if len(dead) == 0:
-            return 0
+            return
 
         weight = self.model.vqvae.quantizer.embedding.weight
         most_active = code_usage.argmax().item()
@@ -243,8 +239,6 @@ class Trainer:
         if state:
             state["exp_avg"][dead] = 0
             state["exp_avg_sq"][dead] = 0
-
-        return len(dead)
 
     def _ckpt_dir(self) -> Path:
         d = Path(self.cfg["checkpoint_dir"]) / self.run_name
