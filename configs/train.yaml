@@ -22,7 +22,7 @@ early_stopping_min_delta: 0.0  # minimum val_loss improvement to reset patience
 val_ratio: 0.1
 
 # checkpoint
-checkpoint_dir: "checkpoints"      # root directory for checkpoints
+checkpoint_dir: "logs"             # root directory for checkpoints
 checkpoint_interval: 10           # save a checkpoint every N epochs
 
 # codebook

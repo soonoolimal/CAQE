@@ -87,8 +87,7 @@ class Trainer:
                 **{f"val/{k}": v for k, v in val_metrics.items()},
                 "dead_codes": n_dead,
                 "lr": lr,
-                "epoch": epoch,
-            })
+            }, step=epoch)
 
             self._log_csv(csv_path, csv_fields, flat_cfg, epoch, lr, train_metrics, val_metrics, n_dead)
 
