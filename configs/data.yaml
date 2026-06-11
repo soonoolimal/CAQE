@@ -2,13 +2,13 @@ gutenberg:
     hf_id: "willwade/Gutenberg-dialog-en"
     split: "train"       # provides train, valid, and test (valid/test ignored: train/val split is created from train)
     text_column: "text"  # column name containing the text
-    sample_size: 100000
+    sample_size: 500000
 
 opensubtitles:
     hf_id: "Helsinki-NLP/open_subtitles"
     lang1: "en"  # language to extract (English side)
     lang2: "fi"  # partner language required to load the parallel corpus (only lang1 side is used)
-    sample_size: 100000
+    sample_size: 500000
     noise_filter:
         min_chars: 10         # minimum character count (removes fragments like "OK", "Yeah")
         max_chars: 200        # maximum character count (removes likely subtitle merge errors); 200 chars ≈ 50 tokens, so this also bounds token length

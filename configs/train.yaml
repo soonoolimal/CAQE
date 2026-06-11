@@ -26,5 +26,5 @@ checkpoint_dir: "logs"             # root directory for checkpoints
 checkpoint_interval: 10           # save a checkpoint every N epochs
 
 # codebook
-warm_start_batches: 50  # batches of Encoder(h) outputs collected for K-Means warm start
-dead_code_reinit: false  # reinitialize dead codebook entries after each epoch
+warm_start_samples: 200000  # z_e samples collected for K-Means warm start
+dead_code_reinit: true  # reinitialize dead codebook entries after each epoch

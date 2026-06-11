@@ -169,7 +169,7 @@ class MLMHiddenExtractor(BaseHiddenExtractor):
         self._load_model()
 
         out_dir = out_dir / self.model_key
-        out_dir.mkdir(parents=True, exist_ok=True)
+        out_dir.mkdir(parents=True, exist_ok=False)
 
         # accumulation buffers for chunk saving
         buf_hidden = []
@@ -180,7 +180,7 @@ class MLMHiddenExtractor(BaseHiddenExtractor):
         chunk_idx = 0        # index of the next chunk file to save
         sentence_offset = 0  # global sentence index offset across batches
 
-        for batch_start in tqdm(range(0, len(texts), self.tokenizer_batch_size), desc=f"MLM [{self.model_key}]"):
+        for batch_start in tqdm(range(0, len(texts), self.tokenizer_batch_size), desc=f"MLM [{self.model_key}]", dynamic_ncols=True):
             batch_texts = texts[batch_start: batch_start + self.tokenizer_batch_size]
 
             # tokenize batch
@@ -344,7 +344,7 @@ class NTPHiddenExtractor(BaseHiddenExtractor):
         self._load_model()
 
         out_dir = out_dir / self.model_key
-        out_dir.mkdir(parents=True, exist_ok=True)
+        out_dir.mkdir(parents=True, exist_ok=False)
 
         # accumulation buffers for chunk saving
         buf_hidden = []
@@ -356,7 +356,7 @@ class NTPHiddenExtractor(BaseHiddenExtractor):
         chunk_idx = 0        # index of the next chunk file to save
         sentence_offset = 0  # global sentence index offset across batches
 
-        for batch_start in tqdm(range(0, len(texts), self.tokenizer_batch_size), desc=f"NTP [{self.model_key}]"):
+        for batch_start in tqdm(range(0, len(texts), self.tokenizer_batch_size), desc=f"NTP [{self.model_key}]", dynamic_ncols=True):
             batch_texts = texts[batch_start: batch_start + self.tokenizer_batch_size]
 
             # tokenize batch

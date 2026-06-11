@@ -9,8 +9,8 @@ Output:
     data/train/hidden_vecs/{dataset}/{model_key}/chunk_XXXX.pt
 
 Usage (from project root):
-    python scripts/preprocess.py --dataset gutenberg --backbone mlm
-    python scripts/preprocess.py --dataset opensubtitles --backbone ntp
+    python -m train.preprocess --dataset gutenberg --backbone mlm
+    python -m train.preprocess --dataset opensubtitles --backbone ntp
 """
 
 import argparse

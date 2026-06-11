@@ -35,26 +35,37 @@ class Trainer:
 
         self.optimizer = self._build_optimizer()
         self.scheduler = self._build_scheduler()
+        self._warm_start_n = 0
 
         # cosine scheduler runs the full schedule (early stopping is incompatible)
         self.use_early_stopping = (self.cfg["early_stopping"] and self.cfg["scheduler"] != "cosine")
 
     @torch.no_grad()
-    def warm_start(self):
-        """Collects Encoder(h) outputs from the first warm_start_batches and runs K-Means init."""
+    def warm_start(self) -> int:
+        """Collects z_e = Encoder(h) + Projection(h) samples and runs K-Means init."""
         self.model.eval()
-        h_enc_samples = []
+        z_e_samples = []
+        target_n = self.cfg["warm_start_samples"]
+        collected = 0
+        print(f"Warm start target samples: {target_n:,}")
 
-        for i, (hidden, _) in enumerate(self.train_loader):
-            if i >= self.cfg["warm_start_batches"]:
-                break
+        for hidden, _ in self.train_loader:
             hidden = hidden.to(self.device)
-            h_enc = self.model.vqvae.encoder(hidden)
-            h_enc_samples.append(h_enc.cpu())
+            vqvae = self.model.vqvae
+            z_e = vqvae.encoder(hidden) + vqvae.projection(hidden)
 
-        h_enc_all = torch.cat(h_enc_samples, dim=0)
-        self.model.vqvae.quantizer.warm_start(h_enc_all)
-        print(f"Warm start complete: {h_enc_all.shape[0]:,} samples -> K-Means({self.model.vqvae.quantizer.n_e})")
+            remaining = target_n - collected
+            z_e_samples.append(z_e[:remaining].cpu())
+            collected += min(z_e.shape[0], remaining)
+
+            if collected >= target_n:
+                break
+
+        z_e_all = torch.cat(z_e_samples, dim=0)
+        self.model.vqvae.quantizer.warm_start(z_e_all)
+        self._warm_start_n = z_e_all.shape[0]
+        print(f"Warm start complete: {self._warm_start_n:,} samples -> K-Means({self.model.vqvae.quantizer.n_e})")
+        return self._warm_start_n
 
     def train(self):
         """Runs the full training loop."""
@@ -65,13 +76,17 @@ class Trainer:
         )
         csv_path, csv_fields, flat_cfg = self._init_csv()
 
-        self.warm_start()
+        warm_start_actual_samples = self.warm_start()
+        wandb.config.update(
+            {"warm_start_actual_samples": warm_start_actual_samples},
+            allow_val_change=True,
+        )
 
         best_val_loss = float("inf")
         best_epoch = 0
         patience_counter = 0
 
-        epoch_pbar = tqdm(range(1, self.cfg["n_epochs"] + 1), desc="Epochs")
+        epoch_pbar = tqdm(range(1, self.cfg["n_epochs"] + 1), desc="Epochs", dynamic_ncols=True)
         for epoch in epoch_pbar:
             train_metrics = self._train_epoch(epoch)
             val_metrics, code_usage = self._val_epoch(epoch)
@@ -97,6 +112,12 @@ class Trainer:
                 "ppl": f"{val_metrics['ppl']:.1f}",
                 "dead": n_dead,
             })
+            tqdm.write(
+                f"Epoch {epoch} | "
+                f"train_loss={train_metrics['loss']:.4f}  train_ppl={train_metrics['ppl']:.1f}  "
+                f"val_loss={val_metrics['loss']:.4f}  val_ppl={val_metrics['ppl']:.1f}  "
+                f"dead={n_dead}"
+            )
 
             if epoch % self.cfg["checkpoint_interval"] == 0:
                 self._save_interval_checkpoint(epoch)
@@ -150,7 +171,7 @@ class Trainer:
         totals = {"loss": 0.0, "recon_loss": 0.0, "vq_loss": 0.0, "clf_loss": 0.0, "ppl": 0.0}
         n_batches = 0
 
-        pbar = tqdm(self.train_loader, desc=f"Training epoch {epoch}")
+        pbar = tqdm(self.train_loader, desc=f"Epoch {epoch} train", leave=False, dynamic_ncols=True)
         for hidden, target in pbar:
             hidden = hidden.to(self.device)
             target = target.to(self.device)
@@ -185,7 +206,7 @@ class Trainer:
 
         code_usage = torch.zeros(self.model.vqvae.quantizer.n_e)
 
-        pbar = tqdm(self.val_loader, desc=f"Validation epoch {epoch}")
+        pbar = tqdm(self.val_loader, desc=f"Epoch {epoch} val", leave=False, dynamic_ncols=True)
         for hidden, target in pbar:
             hidden = hidden.to(self.device)
             target = target.to(self.device)
@@ -285,7 +306,7 @@ class Trainer:
             ["epoch", "lr"]
             + [f"train_{k}" for k in ["loss", "recon_loss", "vq_loss", "clf_loss", "ppl"]]
             + [f"val_{k}" for k in ["loss", "recon_loss", "vq_loss", "clf_loss", "ppl"]]
-            + ["dead_codes"]
+            + ["dead_codes", "warm_start_actual_n"]
             + list(flat_cfg.keys())
         )
 
@@ -308,5 +329,6 @@ class Trainer:
                 **{f"train_{k}": v for k, v in train_metrics.items()},
                 **{f"val_{k}": v for k, v in val_metrics.items()},
                 "dead_codes": n_dead,
+                "warm_start_actual_n": self._warm_start_n,
                 **flat_cfg,
             })

@@ -2,10 +2,11 @@
 VQVAE components and model for NLP token representations.
 """
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from sklearn.cluster import KMeans
+from sklearn.cluster import MiniBatchKMeans
 from tqdm import tqdm
 
 
@@ -47,6 +48,7 @@ class VectorQuantizer(nn.Module):
         beta: float,
         ema_gamma: float | None,
         kmeans_n_init: int,
+        kmeans_batch_size: int,
         kmeans_seed: int,
     ):
         super().__init__()
@@ -56,6 +58,7 @@ class VectorQuantizer(nn.Module):
         self.beta = beta
         self.ema_gamma = ema_gamma
         self.kmeans_n_init = kmeans_n_init
+        self.kmeans_batch_size = kmeans_batch_size
         self.kmeans_seed = kmeans_seed
 
         self.embedding = nn.Embedding(n_e, e_dim)
@@ -64,17 +67,43 @@ class VectorQuantizer(nn.Module):
         self.register_buffer("ema_cluster_size", torch.zeros(n_e))      # N_k (cluster size)
         self.register_buffer("ema_embed_avg", torch.zeros(n_e, e_dim))  # m_k (embedding sum)
 
-    def warm_start(self, h_enc: torch.Tensor):
-        """Initializes the codebook with K-Means over Encoder(h), then seeds EMA buffers to match."""
-        data = h_enc.detach().cpu().numpy()
+    def warm_start(self, z_e: torch.Tensor):
+        """Initializes the codebook with K-Means over z_e = Encoder(h) + Projection(h), then seeds EMA buffers to match."""
+        data = z_e.detach().cpu().numpy()
+        n_samples = len(data)
+
+        if n_samples < self.n_e:
+            raise ValueError(
+                f"K-Means warm start requires at least n_e samples: "
+                f"got {n_samples}, n_e={self.n_e}"
+            )
+        if self.kmeans_batch_size < self.n_e:
+            raise ValueError(
+                f"kmeans_batch_size must be >= n_e for MiniBatchKMeans warm start: "
+                f"got kmeans_batch_size={self.kmeans_batch_size}, n_e={self.n_e}"
+            )
+
         best_inertia = float("inf")
         best_centers = None
-        for i in tqdm(range(self.kmeans_n_init), desc="K-Means"):
-            km = KMeans(n_clusters=self.n_e, n_init=1, random_state=self.kmeans_seed + i)
-            km.fit(data)
+
+        outer_pbar = tqdm(range(self.kmeans_n_init), desc="K-Means", dynamic_ncols=True)
+        for i in outer_pbar:
+            km = MiniBatchKMeans(n_clusters=self.n_e, n_init=1, batch_size=self.kmeans_batch_size, random_state=self.kmeans_seed + i)
+
+            rng = np.random.RandomState(self.kmeans_seed + i)
+            indices = rng.permutation(n_samples)
+
+            batch_starts = range(0, n_samples, self.kmeans_batch_size)
+            inner_pbar = tqdm(batch_starts, desc=f"  run {i+1}/{self.kmeans_n_init}", leave=False, dynamic_ncols=True)
+            for start in inner_pbar:
+                batch = data[indices[start:start + self.kmeans_batch_size]]
+                km.partial_fit(batch)
+                inner_pbar.set_postfix({"inertia": f"{km.inertia_:.4f}"})
+
             if km.inertia_ < best_inertia:
                 best_inertia = km.inertia_
                 best_centers = km.cluster_centers_
+
         centers = torch.tensor(best_centers, dtype=torch.float32).to(self.embedding.weight.device)
         self.embedding.weight.data.copy_(centers)
 
@@ -165,11 +194,12 @@ class VQVAE(nn.Module):
         beta = cfg["beta"]
         ema_gamma = cfg["ema_gamma"]
         kmeans_n_init = cfg["kmeans_n_init"]
+        kmeans_batch_size = cfg["kmeans_batch_size"]
         kmeans_seed = cfg["kmeans_seed"]
 
         self.projection = Projection(h_dim, e_dim)
         self.encoder = Encoder(h_dim, enc_h_dim, e_dim)
-        self.quantizer = VectorQuantizer(n_e, e_dim, beta, ema_gamma, kmeans_n_init, kmeans_seed)
+        self.quantizer = VectorQuantizer(n_e, e_dim, beta, ema_gamma, kmeans_n_init, kmeans_batch_size, kmeans_seed)
         self.decoder = Decoder(e_dim, dec_h_dim, h_dim)
 
     def forward(self, h: torch.Tensor) -> dict:

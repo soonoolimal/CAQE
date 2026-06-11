@@ -12,16 +12,16 @@ bash preprocess.sh [GPU_ID=0]
 bash train.sh [N_E=8000] [GPU_ID=0]
 ```
 
-CLI arguments cover the primary experimental options (`--n_e`/`--ne`, `--ema`, `--dead_code_reinit`/`--reinit`). All other hyperparameters are managed in `configs/`.
+EMA and dead code reinitialization are enabled by default. CLI arguments cover the primary experimental options (`--n_e`/`--ne`, `--no_ema`, `--no_reinit`). All other hyperparameters are managed in `configs/`.
 
 Or run individually:
 
 ```bash
-python scripts/train.py --backbone [mlm|ntp] --model [MODEL] [--n_e N_E] [--ema] [--dead_code_reinit]
-python scripts/train.py --backbone mlm --model bert
-python scripts/train.py --backbone mlm --model roberta
-python scripts/train.py --backbone mlm --model modernbert
-python scripts/train.py --backbone ntp --model opt_1.3b
-python scripts/train.py --backbone ntp --model llama3_3b
-python scripts/train.py --backbone ntp --model llama31_8b
+python -m train.run --backbone [mlm|ntp] --model [MODEL] [--n_e N_E] [--no_ema] [--no_reinit]
+python -m train.run --backbone mlm --model bert
+python -m train.run --backbone mlm --model roberta
+python -m train.run --backbone mlm --model modernbert
+python -m train.run --backbone ntp --model opt_1.3b
+python -m train.run --backbone ntp --model llama3_3b
+python -m train.run --backbone ntp --model llama31_8b
 ```

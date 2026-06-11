@@ -16,9 +16,10 @@ caqe:
         enc_h_dim: 512     # Encoder MLP hidden layer dimension
         dec_h_dim: 512     # Decoder MLP hidden layer dimension
         beta: 0.25         # commitment loss weight (robust in range 0.1–2.0 per VQ-VAE paper)
-        ema_gamma: null    # EMA decay for codebook usage tracking (null for disable)
-        kmeans_n_init: 10  # number of K-Means runs with different centroid seeds (best result is kept)
-        kmeans_seed: 42    # random seed for K-Means reproducibility
+        ema_gamma: 0.99    # EMA decay; train.run sets this to null when --no_ema flag is passed
+        kmeans_n_init: 3        # number of K-Means runs with different centroid seeds (best result is kept)
+        kmeans_batch_size: 8192  # MiniBatchKMeans mini-batch size per iteration
+        kmeans_seed: 42          # random seed for K-Means reproducibility
         # h_dim: not set here (read at runtime from backbone.config.hidden_size)
     clf:
         clf_h_dim: 256  # Classifier MLP hidden layer dimension
