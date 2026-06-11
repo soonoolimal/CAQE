@@ -166,10 +166,13 @@ class MLMHiddenExtractor(BaseHiddenExtractor):
 
     # runs the full extraction pipeline: tokenize -> mask -> forward -> accumulate -> save chunks
     def extract(self, texts: list[str], out_dir: Path) -> None:
-        self._load_model()
-
         out_dir = out_dir / self.model_key
+        if out_dir.exists():
+            print(f"[skip] {out_dir} already exists")
+            return
         out_dir.mkdir(parents=True, exist_ok=False)
+
+        self._load_model()
 
         # accumulation buffers for chunk saving
         buf_hidden = []
@@ -212,6 +215,10 @@ class MLMHiddenExtractor(BaseHiddenExtractor):
         # save any remaining samples as the final chunk
         if buf_hidden:
             self._flush_chunk(buf_hidden, buf_target, buf_sent, buf_pos, out_dir, chunk_idx)
+
+        del self.model
+        self.model = None
+        torch.cuda.empty_cache()
 
     # concatenates buffers and saves one chunk .pt file
     def _flush_chunk(self, buf_hidden, buf_target, buf_sent, buf_pos, out_dir, chunk_idx):
@@ -341,10 +348,13 @@ class NTPHiddenExtractor(BaseHiddenExtractor):
 
     # runs the full extraction pipeline: tokenize -> forward -> accumulate -> save chunks
     def extract(self, texts: list[str], out_dir: Path):
-        self._load_model()
-
         out_dir = out_dir / self.model_key
+        if out_dir.exists():
+            print(f"[skip] {out_dir} already exists")
+            return
         out_dir.mkdir(parents=True, exist_ok=False)
+
+        self._load_model()
 
         # accumulation buffers for chunk saving
         buf_hidden = []
@@ -389,6 +399,10 @@ class NTPHiddenExtractor(BaseHiddenExtractor):
         # save any remaining samples as the final chunk
         if buf_hidden:
             self._flush_chunk(buf_hidden, buf_target, buf_sent, buf_tok_pos, buf_hid_pos, out_dir, chunk_idx)
+
+        del self.model
+        self.model = None
+        torch.cuda.empty_cache()
 
     # concatenates buffers and saves one chunk .pt file
     def _flush_chunk(self, buf_hidden, buf_target, buf_sent, buf_tok_pos, buf_hid_pos, out_dir, chunk_idx):
