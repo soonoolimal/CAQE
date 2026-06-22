@@ -1,0 +1,57 @@
+sample_size: 500000
+seed: 42
+
+save:
+  dirs:
+    preprocessed: "data/train/preprocessed"
+    hidden_vecs: "data/train/hidden_vecs"
+  chunk_size: 10000
+
+source:
+  gutenberg:
+    hf_id: "willwade/Gutenberg-dialog-en"
+  opensubtitles:
+    hf_id: "Helsinki-NLP/open_subtitles"
+    lang1: "en"
+    lang2: "fi"
+    noise_filter:
+      min_chars: 3
+      min_alpha_ratio: 0.5
+
+backbone:
+  bert:
+    hf_id: "bert-base-uncased"
+    type: "mlm"
+    max_len: 512
+    tokenizer_batch_size: 32
+    forward_batch_size: 1024
+  roberta:
+    hf_id: "roberta-base"
+    type: "mlm"
+    max_len: 512
+    tokenizer_batch_size: 32
+    forward_batch_size: 1024
+  modernbert:
+    hf_id: "answerdotai/ModernBERT-base"
+    type: "mlm"
+    max_len: 512
+    tokenizer_batch_size: 32
+    forward_batch_size: 1024
+  llama32_3b:
+    hf_id: "meta-llama/Llama-3.2-3B"
+    type: "ntp"
+    max_len: 2048
+    tokenizer_batch_size: 32
+    forward_batch_size: 64
+  llama31_8b:
+    hf_id: "meta-llama/Meta-Llama-3.1-8B"
+    type: "ntp"
+    max_len: 2048
+    tokenizer_batch_size: 32
+    forward_batch_size: 16
+  opt_1_3b:
+    hf_id: "facebook/opt-1.3b"
+    type: "ntp"
+    max_len: 2048
+    tokenizer_batch_size: 32
+    forward_batch_size: 128

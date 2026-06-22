@@ -1,0 +1,35 @@
+# setup
+seed: 42
+num_workers: 4
+batch_size: 512
+n_epochs: 100
+val_ratio: 0.2
+
+# optimizer and scheduler
+lr: 3.0e-4            # use 3.0e-4 with cosine scheduler
+weight_decay: 0.0
+scheduler: "cosine"   # cosine / none
+early_stopping: true  # only active when scheduler is "none"
+patience: 10
+min_delta: 0.0
+
+# codebook reinitialization (2-stage K-means over full train data, final stage noise addition over dead codes)
+reinit_steps: 500        # stage 2 fires once after this many training steps at epoch 1
+noise_reinit_ratio: 0.1  # stage 3 active only for the first (ratio * n_epochs) epochs
+noise_init_scale: 0.1    # stage 3 starting noise magnitude, decays linearly to 0
+km_n_init: 1             # number of K-Means runs (best inertia kept, but 1 is sufficient since full data is used)
+km_batch_size: 8192      # MiniBatchKMeans batch size per iteration
+km_seed: 42
+
+# diagnostic
+run_diagnostic: true  # run one vanilla epoch before training to log quant_error for reinit_steps analysis
+
+# WandB logging
+wandb_project: "CAQE-Training-Experiments"
+pca_wandb_epochs: 10  # epoch-level PCA snapshots logged to wandb only for the first N epochs
+
+# local logging
+local_log_dir: "logs"
+ckpt_save_interval: 10  # checkpoint logging
+pca_local_interval: 50  # local PCA snapshots saved every N training steps
+pca_local_epochs: 10    # local PCA snapshots saved only for the first N epochs

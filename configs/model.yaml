@@ -1,0 +1,7 @@
+n_e: 8000  # codebook size
+e_dim: 256
+enc_h_dim: 512
+dec_h_dim: 512
+clf_h_dim: 256
+
+beta: 1.0  # commitment loss weight (robust in range 0.1–2.0 per VQ-VAE paper)
