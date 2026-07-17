@@ -1,0 +1,5 @@
+n_e: 8000
+e_dim: 256
+enc_h_dim: 512
+dec_dims: [512]
+clf_h_dim: 256

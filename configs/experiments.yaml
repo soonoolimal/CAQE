@@ -1,0 +1,7 @@
+datasets:
+  coinco:
+    url: "https://www.ims.uni-stuttgart.de/documents/ressourcen/korpora/coinco/coinco.xml.gz"
+    path: "data/experiments/raw/coinco.txt"
+  natural_stories:
+    url: "https://github.com/languageMIT/naturalstories/archive/refs/heads/master.zip"
+    path: "data/experiments/raw/natural_stories"

@@ -1,0 +1,30 @@
+seed: 42
+num_workers: 4
+batch_size: 512
+n_epochs: 200
+val_ratio: 0.2
+
+km_seed: 42
+km_n_init: 1
+km_batch_size: 8192
+reinit_steps: 500
+noise_reinit_ratio: 0.1
+noise_init_scale: 0.1
+
+beta: 1.0
+scheduler: "cosine"
+lr: 3.0e-4
+weight_decay: 0.0
+early_stopping: true
+patience: 10
+min_delta: 0.0
+
+wandb_project: "VQCAE-Training-Experiments"
+diagnose: true
+diag_steps_ratio: 1.5
+pca_wandb: true
+pre_reinit_pca_n: 10
+pca_ze_ratio: 1.5
+
+local_log_dir: "logs"
+ckpt_save_interval: 10
